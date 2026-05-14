@@ -1,0 +1,8 @@
+.env
+data
+work
+server.out.log
+server.err.log
+.git
+.github
+node_modules
