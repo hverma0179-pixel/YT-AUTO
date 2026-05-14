@@ -68,3 +68,91 @@ This is a local starter scaffold. Before using it for real users, replace the fi
 ## Source Video Reliability
 
 Cloud providers can be rate-limited or blocked by YouTube when downloading videos with `yt-dlp`. If a YouTube URL fails with a bot check or HTTP 429, use a direct video file URL that you control, such as an `.mp4`, `.mov`, `.m4v`, or `.webm` file from your storage provider.
+
+## YouTube Cookies Setup
+
+YouTube may block server IPs with rate limits or bot checks. When that happens, `yt-dlp` can use a Netscape-format `cookies.txt` file exported from a browser where you are signed in to YouTube.
+
+Do not commit `cookies.txt` to GitHub. It can grant access to your YouTube session. This repo ignores it with `.gitignore`.
+
+### Export cookies.txt
+
+1. Open your normal browser and sign in to the YouTube account that is allowed to watch the source video.
+2. Install a trusted cookies export browser extension that exports Netscape-format cookies, such as "Get cookies.txt LOCALLY".
+3. Open `youtube.com` in that browser.
+4. Export cookies for YouTube as `cookies.txt`.
+5. Save the file locally next to `server.js` for local testing:
+
+```text
+cookies.txt
+```
+
+### Local env
+
+Add this to `.env`:
+
+```env
+YTDLP_COOKIES_PATH=./cookies.txt
+YTDLP_VERBOSE=false
+```
+
+For debugging, set:
+
+```env
+YTDLP_VERBOSE=true
+```
+
+When `YTDLP_VERBOSE=true`, the app adds `-vU` to the `yt-dlp` command.
+
+### Render env
+
+On Render Docker services, the safest option is a Render Secret File. In the Render dashboard, open your service, go to **Environment**, then under **Secret Files** add:
+
+```text
+Filename: cookies.txt
+Contents: paste the exported cookies.txt content
+```
+
+Render makes Docker secret files available at:
+
+```text
+/etc/secrets/cookies.txt
+```
+
+Then set:
+
+```env
+YTDLP_COOKIES_PATH=/etc/secrets/cookies.txt
+YTDLP_VERBOSE=false
+```
+
+If you prefer a persistent disk, place `cookies.txt` on that disk and point `YTDLP_COOKIES_PATH` to that file. For example, with a disk mounted at:
+
+```text
+/var/data
+```
+
+you can use:
+
+```env
+YTDLP_COOKIES_PATH=/var/data/cookies.txt
+```
+
+### yt-dlp reliability options
+
+For YouTube URLs, the app now automatically adds:
+
+```text
+--sleep-requests 5
+--sleep-interval 5
+--max-sleep-interval 15
+--retries 10
+--fragment-retries 10
+--no-playlist
+```
+
+If `cookies.txt` exists at `YTDLP_COOKIES_PATH`, the app also adds:
+
+```text
+--cookies path/to/cookies.txt
+```

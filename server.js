@@ -20,6 +20,8 @@ const TOOL_COMMANDS = {
   "yt-dlp": process.env.YTDLP_PATH || "yt-dlp",
 };
 const YTDLP_JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node:/usr/local/bin/node";
+const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || path.join(__dirname, "cookies.txt");
+const YTDLP_VERBOSE = String(process.env.YTDLP_VERBOSE || "").toLowerCase() === "true";
 const TOOL_VERSION_ARGS = {
   ffmpeg: ["-version"],
   "yt-dlp": ["--version"],
@@ -346,7 +348,7 @@ function queueJob(job, reason) {
   runPipeline(job).catch((error) => {
     job.status = "failed";
     job.updatedAt = new Date().toISOString();
-    logJob(job, error.message || "Pipeline failed.");
+    logJob(job, friendlyPipelineError(error));
     saveStore();
   });
 }
@@ -452,20 +454,7 @@ async function prepareVideoAssets(job) {
 
   if (isYouTubeUrl(job.videoUrl)) {
     await requireTool("yt-dlp");
-    await runTool("yt-dlp", [
-      "--no-playlist",
-      "--js-runtimes",
-      YTDLP_JS_RUNTIME,
-      "--extractor-args",
-      "youtube:player_client=android,web",
-      "-f",
-      "bv*+ba/b",
-      "--merge-output-format",
-      "mp4",
-      "-o",
-      rawPath,
-      job.videoUrl,
-    ]);
+    await runYtDlp(job.videoUrl, rawPath);
   }
 
   await runTool("ffmpeg", [
@@ -501,6 +490,60 @@ function isYouTubeUrl(value) {
 
 function isDirectVideoUrl(value) {
   return /^https:\/\/.+\.(mp4|mov|m4v|webm)(\?.*)?$/i.test(value);
+}
+
+function runYtDlp(videoUrl, outputPath) {
+  const args = buildYtDlpArgs(videoUrl, outputPath);
+  return runTool("yt-dlp", args).catch((error) => {
+    throw new Error(friendlyYtDlpError(error));
+  });
+}
+
+function buildYtDlpArgs(videoUrl, outputPath) {
+  const args = [];
+
+  if (YTDLP_VERBOSE) args.push("-vU");
+
+  args.push(
+    "--no-playlist",
+    "--sleep-requests",
+    "5",
+    "--sleep-interval",
+    "5",
+    "--max-sleep-interval",
+    "15",
+    "--retries",
+    "10",
+    "--fragment-retries",
+    "10",
+    "--js-runtimes",
+    YTDLP_JS_RUNTIME,
+    "--extractor-args",
+    "youtube:player_client=android,web",
+  );
+
+  if (YTDLP_COOKIES_PATH && fs.existsSync(YTDLP_COOKIES_PATH)) {
+    args.push("--cookies", YTDLP_COOKIES_PATH);
+  }
+
+  args.push("-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", outputPath, videoUrl);
+  return args;
+}
+
+function friendlyPipelineError(error) {
+  const message = friendlyYtDlpError(error);
+  return message || error.message || "Pipeline failed.";
+}
+
+function friendlyYtDlpError(error) {
+  const text = String(error?.message || error || "");
+  if (/429|Too Many Requests/i.test(text)) {
+    return "YouTube rate limited this server/IP. Try later or use cookies.";
+  }
+  if (/Sign in to confirm you.?re not a bot/i.test(text)) {
+    return "YouTube requires browser cookies. Add cookies.txt.";
+  }
+  return text;
 }
 
 async function requireTool(name) {

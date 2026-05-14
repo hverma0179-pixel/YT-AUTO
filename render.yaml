@@ -13,6 +13,12 @@ services:
         value: ffmpeg
       - key: YTDLP_PATH
         value: yt-dlp
+      - key: YTDLP_JS_RUNTIME
+        value: node:/usr/local/bin/node
+      - key: YTDLP_COOKIES_PATH
+        value: /etc/secrets/cookies.txt
+      - key: YTDLP_VERBOSE
+        value: false
       - key: YOUTUBE_PRIVACY_STATUS
         value: private
       - key: OPENROUTER_MODEL

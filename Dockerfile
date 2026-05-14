@@ -24,6 +24,8 @@ ENV HOST=0.0.0.0
 ENV FFMPEG_PATH=ffmpeg
 ENV YTDLP_PATH=yt-dlp
 ENV YTDLP_JS_RUNTIME=node:/usr/local/bin/node
+ENV YTDLP_COOKIES_PATH=./cookies.txt
+ENV YTDLP_VERBOSE=false
 
 EXPOSE 10000
 
