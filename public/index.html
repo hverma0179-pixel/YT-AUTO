@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoShorts Studio</title>
+    <link rel="stylesheet" href="/public/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="auth-view" id="authView">
+        <div class="brand-row">
+          <div class="brand-mark">AS</div>
+          <span>AutoShorts Studio</span>
+        </div>
+        <div class="auth-grid">
+          <div class="auth-copy">
+            <h1>Turn one long video URL into scheduled YouTube Shorts.</h1>
+            <p>
+              Sign in with Google, paste a YouTube URL, choose the daily post time, and let the
+              server handle metadata, rendering, thumbnail creation, and upload.
+            </p>
+            <a class="google-button" href="/auth/google">
+              <span class="google-icon">G</span>
+              Continue with Google
+            </a>
+            <p class="fine-print">
+              Use only videos you own or have permission to reuse. API keys stay on the server.
+            </p>
+          </div>
+          <div class="pipeline-card" aria-label="Automation pipeline preview">
+            <div class="pipeline-step active">
+              <span>1</span>
+              <div>
+                <strong>Paste URL</strong>
+                <small>YouTube long-form source</small>
+              </div>
+            </div>
+            <div class="pipeline-step">
+              <span>2</span>
+              <div>
+                <strong>Generate assets</strong>
+                <small>Short, title, tags, thumbnail</small>
+              </div>
+            </div>
+            <div class="pipeline-step">
+              <span>3</span>
+              <div>
+                <strong>Upload daily</strong>
+                <small>Posted to the logged-in channel</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="app-view hidden" id="appView">
+        <aside class="sidebar">
+          <div class="brand-row compact">
+            <div class="brand-mark">AS</div>
+            <span>AutoShorts</span>
+          </div>
+          <nav class="nav-list" aria-label="Main navigation">
+            <button class="nav-item selected" type="button">Automation</button>
+            <button class="nav-item" type="button">Uploads</button>
+            <button class="nav-item" type="button">Settings</button>
+          </nav>
+          <div class="permission-box">
+            <span class="status-dot"></span>
+            <div>
+              <strong>YouTube access</strong>
+              <small>Upload permission connected</small>
+            </div>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <header class="topbar">
+            <div>
+              <p class="section-label">Automation command center</p>
+              <h2>Daily Short Generator</h2>
+            </div>
+            <div class="profile">
+              <img id="avatar" alt="" />
+              <span id="userName">Creator</span>
+              <button class="ghost-button" id="logoutButton" type="button">Log out</button>
+            </div>
+          </header>
+
+          <section class="creator-panel">
+            <form class="job-form" id="jobForm">
+              <label for="videoUrl">YouTube long video URL</label>
+              <div class="input-row">
+                <input id="videoUrl" name="videoUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." required />
+                <input id="dailyAt" name="dailyAt" type="time" value="09:00" required />
+                <button class="primary-button" type="submit">Create automation</button>
+              </div>
+              <p id="formMessage" class="form-message"></p>
+            </form>
+            <div class="system-checks">
+              <div>
+                <strong>AI metadata</strong>
+                <small>OpenRouter API key from server env</small>
+              </div>
+              <div>
+                <strong>Rendering</strong>
+                <small>Uses yt-dlp and ffmpeg on PATH</small>
+              </div>
+              <div>
+                <strong>Privacy</strong>
+                <small>Default upload visibility from .env</small>
+              </div>
+            </div>
+          </section>
+
+          <section class="jobs-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Queue</p>
+                <h3>Scheduled automations</h3>
+              </div>
+              <button class="ghost-button" id="refreshButton" type="button">Refresh</button>
+            </div>
+            <div class="jobs-list" id="jobsList"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="/public/app.js"></script>
+  </body>
+</html>
