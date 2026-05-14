@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: yt-auto
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
+      - key: FFMPEG_PATH
+        value: ffmpeg
+      - key: YTDLP_PATH
+        value: yt-dlp
+      - key: YOUTUBE_PRIVACY_STATUS
+        value: private
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-4o-mini
