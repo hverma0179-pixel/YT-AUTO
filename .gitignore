@@ -1,0 +1,5 @@
+.env
+data/store.json
+work/
+server.out.log
+server.err.log
