@@ -4,3 +4,4 @@ work/
 server.out.log
 server.err.log
 cookies.txt
+*.cookies.txt

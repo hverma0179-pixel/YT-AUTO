@@ -106,7 +106,15 @@ When `YTDLP_VERBOSE=true`, the app adds `-vU` to the `yt-dlp` command.
 
 ### Render env
 
-On Render Docker services, the safest option is a Render Secret File. In the Render dashboard, open your service, go to **Environment**, then under **Secret Files** add:
+Set this environment variable on Render:
+
+```env
+YTDLP_COOKIES_PATH=./cookies.txt
+```
+
+Then make sure `cookies.txt` exists in the server's app root at runtime. Never upload `cookies.txt` to public GitHub.
+
+On Render Docker services, the safer option is a Render Secret File. In the Render dashboard, open your service, go to **Environment**, then under **Secret Files** add:
 
 ```text
 Filename: cookies.txt
@@ -143,12 +151,13 @@ YTDLP_COOKIES_PATH=/var/data/cookies.txt
 For YouTube URLs, the app now automatically adds:
 
 ```text
---sleep-requests 5
---sleep-interval 5
---max-sleep-interval 15
+--sleep-requests 8
+--sleep-interval 8
+--max-sleep-interval 20
 --retries 10
 --fragment-retries 10
 --no-playlist
+--force-ipv4
 ```
 
 If `cookies.txt` exists at `YTDLP_COOKIES_PATH`, the app also adds:

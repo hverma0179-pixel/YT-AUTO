@@ -20,7 +20,7 @@ const TOOL_COMMANDS = {
   "yt-dlp": process.env.YTDLP_PATH || "yt-dlp",
 };
 const YTDLP_JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node:/usr/local/bin/node";
-const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || path.join(__dirname, "cookies.txt");
+const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || "./cookies.txt";
 const YTDLP_VERBOSE = String(process.env.YTDLP_VERBOSE || "").toLowerCase() === "true";
 const TOOL_VERSION_ARGS = {
   ffmpeg: ["-version"],
@@ -501,17 +501,23 @@ function runYtDlp(videoUrl, outputPath) {
 
 function buildYtDlpArgs(videoUrl, outputPath) {
   const args = [];
+  const cookiesPath = path.resolve(__dirname, YTDLP_COOKIES_PATH);
+
+  if (!fs.existsSync(cookiesPath)) {
+    throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
+  }
 
   if (YTDLP_VERBOSE) args.push("-vU");
 
   args.push(
     "--no-playlist",
+    "--force-ipv4",
     "--sleep-requests",
-    "5",
+    "8",
     "--sleep-interval",
-    "5",
+    "8",
     "--max-sleep-interval",
-    "15",
+    "20",
     "--retries",
     "10",
     "--fragment-retries",
@@ -522,9 +528,7 @@ function buildYtDlpArgs(videoUrl, outputPath) {
     "youtube:player_client=android,web",
   );
 
-  if (YTDLP_COOKIES_PATH && fs.existsSync(YTDLP_COOKIES_PATH)) {
-    args.push("--cookies", YTDLP_COOKIES_PATH);
-  }
+  args.push("--cookies", cookiesPath);
 
   args.push("-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", outputPath, videoUrl);
   return args;
