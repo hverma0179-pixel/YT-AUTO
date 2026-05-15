@@ -134,6 +134,14 @@ YTDLP_COOKIES_PATH=/etc/secrets/cookies.txt
 YTDLP_VERBOSE=false
 ```
 
+The app copies `/etc/secrets/cookies.txt` to a writable temp file before starting `yt-dlp`, then passes the temp file to `yt-dlp`:
+
+```text
+/tmp/cookies.txt
+```
+
+This avoids Render's read-only secret-file mount error while keeping the original secret file unchanged.
+
 If you prefer a persistent disk, place `cookies.txt` on that disk and point `YTDLP_COOKIES_PATH` to that file. For example, with a disk mounted at:
 
 ```text

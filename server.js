@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const http = require("node:http");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
@@ -501,11 +502,9 @@ function runYtDlp(videoUrl, outputPath) {
 
 function buildYtDlpArgs(videoUrl, outputPath) {
   const args = [];
-  const cookiesPath = path.resolve(__dirname, YTDLP_COOKIES_PATH);
+  const cookiesPath = prepareWritableCookiesFile();
 
-  if (!fs.existsSync(cookiesPath)) {
-    throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
-  }
+  if (!cookiesPath) throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
 
   if (YTDLP_VERBOSE) args.push("-vU");
 
@@ -532,6 +531,26 @@ function buildYtDlpArgs(videoUrl, outputPath) {
 
   args.push("-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", outputPath, videoUrl);
   return args;
+}
+
+function prepareWritableCookiesFile() {
+  const originalCookiesPath = path.resolve(__dirname, YTDLP_COOKIES_PATH);
+  const tempCookiesPath = path.join(os.tmpdir(), "cookies.txt");
+  const originalExists = Boolean(YTDLP_COOKIES_PATH && fs.existsSync(originalCookiesPath));
+
+  console.log(`yt-dlp cookies original path: ${originalCookiesPath}`);
+  console.log(`yt-dlp cookies temp path: ${tempCookiesPath}`);
+  console.log(`yt-dlp cookies original exists: ${originalExists}`);
+
+  if (!originalExists) {
+    console.log("yt-dlp cookies temp exists: false");
+    return null;
+  }
+
+  fs.copyFileSync(originalCookiesPath, tempCookiesPath);
+  const tempExists = fs.existsSync(tempCookiesPath);
+  console.log(`yt-dlp cookies temp exists: ${tempExists}`);
+  return tempExists ? tempCookiesPath : null;
 }
 
 function friendlyPipelineError(error) {
