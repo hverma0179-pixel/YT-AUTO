@@ -841,6 +841,17 @@ input:focus {
   color: var(--blue-deep);
 }
 
+.cookie-warning {
+  margin: 2px 0 0;
+  padding: 12px 13px;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 16px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .toast-stack {
   position: fixed;
   right: 18px;
