@@ -38,6 +38,7 @@ const TOOL_COMMANDS = {
 const YTDLP_JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node:/usr/local/bin/node";
 const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || "./cookies.txt";
 const YTDLP_VERBOSE = String(process.env.YTDLP_VERBOSE || "").toLowerCase() === "true";
+const YOUTUBE_COOKIE_NAMES = ["SID", "HSID", "SAPISID", "LOGIN_INFO", "VISITOR_INFO1_LIVE", "__Secure-1PSID", "__Secure-3PSID"];
 const TOOL_VERSION_ARGS = {
   ffmpeg: ["-version"],
   ffprobe: ["-version"],
@@ -396,6 +397,10 @@ async function runPipeline(job) {
   fs.mkdirSync(jobDir, { recursive: true });
 
   try {
+    if (isYouTubeUrl(job.videoUrl)) {
+      setJobProgress(job, "Validating cookies", 3, "Validating YouTube cookies before starting job.");
+      prepareWritableCookiesFile(job, { required: true });
+    }
     const scenePlan = await analyzeVideoForShort(job, jobDir);
     const assets = await prepareVideoAssets(job, scenePlan, jobDir);
 
@@ -619,7 +624,7 @@ async function extractTranscript(job, jobDir) {
   try {
     await requireTool("yt-dlp");
     const transcriptBase = path.join(jobDir, "transcript");
-    const args = buildYtDlpTranscriptArgs(job.videoUrl, transcriptBase);
+    const args = buildYtDlpTranscriptArgs(job.videoUrl, transcriptBase, job);
     await runTool("yt-dlp", args, { timeoutMs: 2 * 60 * 1000, maxOutput: 4000 });
     const transcriptFile = findTranscriptFile(jobDir);
     if (!transcriptFile) return null;
@@ -630,14 +635,15 @@ async function extractTranscript(job, jobDir) {
     const text = buildTranscriptPromptText(entries);
     return { file: transcriptFile, entries, text };
   } catch (error) {
+    logYtDlpCookieError(job, error);
     logJob(job, `Transcript extraction error: ${friendlyYtDlpError(error)}`);
     return null;
   }
 }
 
-function buildYtDlpTranscriptArgs(videoUrl, transcriptBase) {
+function buildYtDlpTranscriptArgs(videoUrl, transcriptBase, job) {
   const args = [];
-  const cookiesPath = prepareWritableCookiesFile();
+  const cookiesPath = prepareWritableCookiesFile(job);
 
   if (YTDLP_VERBOSE) args.push("-vU");
 
@@ -653,6 +659,12 @@ function buildYtDlpTranscriptArgs(videoUrl, transcriptBase) {
     "vtt",
     "--no-playlist",
     "--force-ipv4",
+    "--sleep-requests",
+    "8",
+    "--sleep-interval",
+    "8",
+    "--max-sleep-interval",
+    "20",
     "--retries",
     "10",
     "--fragment-retries",
@@ -759,7 +771,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
     if (isYouTubeUrl(job.videoUrl)) {
       await requireTool("yt-dlp");
       setJobProgress(job, "Downloading video", 10, "Downloading video source at Shorts-friendly quality.");
-      await runYtDlp(job.videoUrl, rawPath);
+      await runYtDlp(job.videoUrl, rawPath, job);
     }
 
     const duration = await getVideoDuration(sourceInput);
@@ -879,16 +891,17 @@ function isDirectVideoUrl(value) {
   return /^https:\/\/.+\.(mp4|mov|m4v|webm)(\?.*)?$/i.test(value);
 }
 
-function runYtDlp(videoUrl, outputPath) {
-  const args = buildYtDlpArgs(videoUrl, outputPath);
+function runYtDlp(videoUrl, outputPath, job) {
+  const args = buildYtDlpArgs(videoUrl, outputPath, job);
   return runTool("yt-dlp", args).catch((error) => {
+    logYtDlpCookieError(job, error);
     throw new Error(friendlyYtDlpError(error));
   });
 }
 
-function buildYtDlpArgs(videoUrl, outputPath) {
+function buildYtDlpArgs(videoUrl, outputPath, job) {
   const args = [];
-  const cookiesPath = prepareWritableCookiesFile();
+  const cookiesPath = prepareWritableCookiesFile(job, { required: true });
 
   if (!cookiesPath) throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
 
@@ -897,6 +910,12 @@ function buildYtDlpArgs(videoUrl, outputPath) {
   args.push(
     "--no-playlist",
     "--force-ipv4",
+    "--sleep-requests",
+    "8",
+    "--sleep-interval",
+    "8",
+    "--max-sleep-interval",
+    "20",
     "--retries",
     "10",
     "--fragment-retries",
@@ -924,24 +943,81 @@ function buildYtDlpArgs(videoUrl, outputPath) {
   return args;
 }
 
-function prepareWritableCookiesFile() {
-  const originalCookiesPath = path.resolve(__dirname, YTDLP_COOKIES_PATH);
+function prepareWritableCookiesFile(job, options = {}) {
+  const originalCookiesPath = resolveCookiesPath(YTDLP_COOKIES_PATH);
   const tempCookiesPath = path.join(os.tmpdir(), "cookies.txt");
   const originalExists = Boolean(YTDLP_COOKIES_PATH && fs.existsSync(originalCookiesPath));
 
-  console.log(`yt-dlp cookies original path: ${originalCookiesPath}`);
-  console.log(`yt-dlp cookies temp path: ${tempCookiesPath}`);
-  console.log(`yt-dlp cookies original exists: ${originalExists}`);
+  logCookieStatus(job, `cookies source path: ${originalCookiesPath}`);
+  logCookieStatus(job, `cookies temp path: ${tempCookiesPath}`);
+  logCookieStatus(job, `cookies source exists: ${originalExists}`);
 
   if (!originalExists) {
-    console.log("yt-dlp cookies temp exists: false");
+    logCookieStatus(job, "cookies validation failed: source file not found.");
+    if (options.required) throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
     return null;
   }
 
+  const originalValidation = validateCookiesFile(originalCookiesPath);
+  if (!originalValidation.ok) {
+    logCookieStatus(job, `cookies validation failed: ${originalValidation.reason}`);
+    throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
+  }
+  logCookieStatus(job, `cookies validation passed: ${originalValidation.foundNames.join(", ")}`);
+
   fs.copyFileSync(originalCookiesPath, tempCookiesPath);
   const tempExists = fs.existsSync(tempCookiesPath);
-  console.log(`yt-dlp cookies temp exists: ${tempExists}`);
+  logCookieStatus(job, `cookies temp exists: ${tempExists}`);
+  const tempValidation = tempExists ? validateCookiesFile(tempCookiesPath) : { ok: false, reason: "temp file not created" };
+  if (!tempValidation.ok) {
+    logCookieStatus(job, `cookies temp validation failed: ${tempValidation.reason}`);
+    throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
+  }
+  logCookieStatus(job, `cookies temp validation passed: ${tempValidation.foundNames.join(", ")}`);
   return tempExists ? tempCookiesPath : null;
+}
+
+function resolveCookiesPath(value) {
+  if (!value) return "";
+  return path.isAbsolute(value) ? value : path.resolve(__dirname, value);
+}
+
+function validateCookiesFile(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) return { ok: false, reason: "path is not a file", foundNames: [] };
+    if (stats.size <= 0) return { ok: false, reason: "file is empty", foundNames: [] };
+
+    const content = fs.readFileSync(filePath, "utf8");
+    if (!/youtube\.com/i.test(content)) return { ok: false, reason: "no youtube.com cookies found", foundNames: [] };
+
+    const foundNames = YOUTUBE_COOKIE_NAMES.filter((name) => new RegExp(`(^|\\s)${escapeRegExp(name)}(\\s|$)`, "m").test(content));
+    const hasAuthCookie = foundNames.some((name) => name !== "VISITOR_INFO1_LIVE");
+    if (!hasAuthCookie) {
+      return { ok: false, reason: `missing login cookies. Found: ${foundNames.join(", ") || "none"}`, foundNames };
+    }
+
+    return { ok: true, reason: "ok", foundNames };
+  } catch (error) {
+    return { ok: false, reason: error.message, foundNames: [] };
+  }
+}
+
+function logCookieStatus(job, message) {
+  console.log(`yt-dlp ${message}`);
+  if (job) logJob(job, message);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function logYtDlpCookieError(job, error) {
+  if (!job) return;
+  const text = String(error?.message || error || "");
+  if (isYtDlpCookieError(text)) {
+    logJob(job, `exact yt-dlp cookie error: ${text.slice(-1000)}`);
+  }
 }
 
 function friendlyPipelineError(error) {
@@ -951,13 +1027,17 @@ function friendlyPipelineError(error) {
 
 function friendlyYtDlpError(error) {
   const text = String(error?.message || error || "");
-  if (/429|Too Many Requests/i.test(text)) {
-    return "YouTube rate limited this server/IP. Try later or use cookies.";
+  if (/Invalid or expired cookies/i.test(text)) {
+    return "Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.";
   }
-  if (/Sign in to confirm you.?re not a bot/i.test(text)) {
-    return "YouTube requires browser cookies. Add cookies.txt.";
+  if (isYtDlpCookieError(text)) {
+    return "YouTube cookies expired or invalid. Export fresh cookies.txt and update Render Secret File.";
   }
   return text;
+}
+
+function isYtDlpCookieError(text) {
+  return /Sign in to confirm|not a bot|HTTP Error 429|Too Many Requests|login|cookies/i.test(String(text || ""));
 }
 
 async function requireTool(name) {

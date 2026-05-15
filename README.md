@@ -108,7 +108,7 @@ Cloud providers can be rate-limited or blocked by YouTube when downloading video
 
 ## YouTube Cookies Setup
 
-YouTube may block server IPs with rate limits or bot checks. When that happens, `yt-dlp` can use a Netscape-format `cookies.txt` file exported from a browser where you are signed in to YouTube.
+YouTube may block server IPs with rate limits or bot checks. When that happens, `yt-dlp` can use a Netscape-format `cookies.txt` file exported from a browser where you are signed in to YouTube. These cookies are temporary, so if YouTube starts asking for login/bot verification again, export fresh cookies and update the Render Secret File.
 
 Do not commit `cookies.txt` to GitHub. It can grant access to your YouTube session. This repo ignores it with `.gitignore`.
 
@@ -118,7 +118,8 @@ Do not commit `cookies.txt` to GitHub. It can grant access to your YouTube sessi
 2. Install a trusted cookies export browser extension that exports Netscape-format cookies, such as "Get cookies.txt LOCALLY".
 3. Open `youtube.com` in that browser.
 4. Export cookies for YouTube as `cookies.txt`.
-5. Save the file locally next to `server.js` for local testing:
+5. Alternative advanced method: run `yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com"` on your own computer.
+6. Save the file locally next to `server.js` for local testing:
 
 ```text
 cookies.txt
@@ -143,15 +144,7 @@ When `YTDLP_VERBOSE=true`, the app adds `-vU` to the `yt-dlp` command.
 
 ### Render env
 
-Set this environment variable on Render:
-
-```env
-YTDLP_COOKIES_PATH=./cookies.txt
-```
-
-Then make sure `cookies.txt` exists in the server's app root at runtime. Never upload `cookies.txt` to public GitHub.
-
-On Render Docker services, the safer option is a Render Secret File. In the Render dashboard, open your service, go to **Environment**, then under **Secret Files** add:
+For Render, use a Secret File instead of committing cookies to GitHub. In the Render dashboard, open your service, go to **Environment**, then under **Secret Files** add:
 
 ```text
 Filename: cookies.txt
@@ -164,20 +157,45 @@ Render makes Docker secret files available at:
 /etc/secrets/cookies.txt
 ```
 
-Then set:
+Set this environment variable on Render:
 
 ```env
 YTDLP_COOKIES_PATH=/etc/secrets/cookies.txt
 YTDLP_VERBOSE=false
 ```
 
-The app copies `/etc/secrets/cookies.txt` to a writable temp file before starting `yt-dlp`, then passes the temp file to `yt-dlp`:
+Redeploy after updating the secret file so the service reads the latest cookies.
+
+The app never passes `/etc/secrets/cookies.txt` directly to `yt-dlp`. It validates the secret file first, then copies it to:
 
 ```text
 /tmp/cookies.txt
 ```
 
-This avoids Render's read-only secret-file mount error while keeping the original secret file unchanged.
+Only `/tmp/cookies.txt` is passed to `yt-dlp`, which avoids Render's read-only secret-file mount error while keeping the original secret file unchanged.
+
+Cookie validation checks:
+
+```text
+file exists
+file size is greater than 0
+youtube.com cookies are present
+login cookies such as SID, HSID, SAPISID, LOGIN_INFO, or secure PSID are present
+```
+
+If validation fails, the job fails clearly with:
+
+```text
+Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.
+```
+
+If YouTube rejects cookies during `yt-dlp`, the job fails clearly with:
+
+```text
+YouTube cookies expired or invalid. Export fresh cookies.txt and update Render Secret File.
+```
+
+Job logs include the cookies source path, temp path, validation result, and exact cookie-related `yt-dlp` failure when available.
 
 If you prefer a persistent disk, place `cookies.txt` on that disk and point `YTDLP_COOKIES_PATH` to that file. For example, with a disk mounted at:
 

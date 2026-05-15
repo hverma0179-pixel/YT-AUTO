@@ -16,7 +16,7 @@ services:
       - key: YTDLP_JS_RUNTIME
         value: node:/usr/local/bin/node
       - key: YTDLP_COOKIES_PATH
-        value: ./cookies.txt
+        value: /etc/secrets/cookies.txt
       - key: YTDLP_VERBOSE
         value: false
       - key: YOUTUBE_PRIVACY_STATUS
