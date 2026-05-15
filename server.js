@@ -21,10 +21,13 @@ const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
 const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 720);
 const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1280);
+const SHORT_PRESET = process.env.SHORT_PRESET || "veryfast";
+const SHORT_CRF = process.env.SHORT_CRF || "28";
 const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
 const MAX_SOURCE_DURATION_SECONDS = Number(process.env.MAX_SOURCE_DURATION_SECONDS || 2 * 60 * 60);
+const TRANSCRIPT_LANGS = process.env.TRANSCRIPT_LANGS || "en.*,en";
 const TOOL_COMMANDS = {
   ffmpeg: process.env.FFMPEG_PATH || "ffmpeg",
   ffprobe: process.env.FFPROBE_PATH || "ffprobe",
@@ -379,15 +382,14 @@ async function runPipeline(job) {
   const user = store.users[job.userId];
   if (!user) throw new Error("User no longer exists.");
 
-  let assets;
+  const jobDir = path.join(WORK_DIR, job.id);
+  fs.mkdirSync(jobDir, { recursive: true });
 
   try {
-    assets = await prepareVideoAssets(job);
+    const scenePlan = await analyzeVideoForShort(job, jobDir);
+    const assets = await prepareVideoAssets(job, scenePlan, jobDir);
 
-    setJobProgress(job, "Generating metadata", 70, "Generating AI metadata.");
-    const metadata = await generateMetadata(job.videoUrl);
-
-    const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, metadata, job);
+    const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, scenePlan.metadata, job);
 
     job.status = "scheduled";
     job.stage = "Completed";
@@ -395,12 +397,19 @@ async function runPipeline(job) {
     job.error = null;
     job.lastRunAt = new Date().toISOString();
     job.lastUploadId = uploadId;
+    job.lastMetadata = scenePlan.metadata;
+    job.lastScene = {
+      start: scenePlan.start,
+      duration: scenePlan.duration,
+      reason: scenePlan.reason,
+      fallbackUsed: scenePlan.fallbackUsed,
+    };
     job.nextRunAt = nextDailyRun(job.dailyAt).toISOString();
     job.updatedAt = new Date().toISOString();
     logJob(job, `Upload complete: https://youtube.com/watch?v=${uploadId}`);
     saveStore();
   } finally {
-    if (assets?.jobDir) cleanupJobFiles(assets.jobDir);
+    cleanupJobFiles(jobDir);
   }
 }
 
@@ -417,16 +426,71 @@ function setJobProgress(job, stage, progress, message) {
   saveStore();
 }
 
-async function generateMetadata(videoUrl) {
-  if (!process.env.OPENROUTER_API_KEY) {
-    return fallbackMetadata(videoUrl);
+async function analyzeVideoForShort(job, jobDir) {
+  setJobProgress(job, "Analyzing transcript", 5, "Checking transcript/captions.");
+  const transcript = await extractTranscript(job, jobDir);
+  const fallback = fallbackScenePlan(job.videoUrl, transcript ? "AI scene selection failed." : "Transcript not found.");
+
+  if (!transcript) {
+    logJob(job, "Transcript not found. Fallback used: yes.");
+    return fallback;
   }
 
+  logJob(job, `Transcript found: ${transcript.entries.length} timestamped lines.`);
+
+  if (!process.env.OPENROUTER_API_KEY) {
+    logJob(job, "AI scene selection skipped: OPENROUTER_API_KEY is missing. Fallback used: yes.");
+    return fallbackScenePlan(job.videoUrl, "OPENROUTER_API_KEY missing.");
+  }
+
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      setJobProgress(job, "Generating metadata", 12, attempt === 1 ? "AI selecting best scene and metadata." : "Retrying AI JSON response.");
+      const plan = await requestAiScenePlan(job, transcript.text, attempt);
+      const normalized = normalizeScenePlan(plan, job.videoUrl);
+      logJob(job, `AI selected timestamp: ${normalized.start} for ${normalized.duration}s.`);
+      logJob(job, `AI generated title: ${normalized.metadata.title}`);
+      logJob(job, `AI generated description: ${normalized.metadata.description}`);
+      logJob(job, `AI scene reason: ${normalized.reason}`);
+      logJob(job, "Fallback used: no.");
+      return normalized;
+    } catch (error) {
+      lastError = error;
+      logJob(job, `AI scene selection error attempt ${attempt}: ${error.message}`);
+    }
+  }
+
+  logJob(job, `AI failed after retry. Fallback used: yes. Error: ${lastError?.message || "Unknown AI error"}`);
+  return fallbackScenePlan(job.videoUrl, lastError?.message || "AI failed.");
+}
+
+async function requestAiScenePlan(job, transcriptText, attempt) {
+  const recentTitles = store.jobs
+    .filter((item) => item.userId === job.userId && item.lastMetadata?.title)
+    .slice(-10)
+    .map((item) => item.lastMetadata.title);
+  const uniquenessSeed = crypto.randomUUID();
   const prompt = [
-    "Create YouTube Shorts metadata for a vertical clip made from this long video URL.",
-    "Return only valid JSON with keys: title, description, tags, thumbnailText.",
-    "Rules: title max 90 characters, tags is 8-15 short strings, description includes a short rights-safe note.",
-    `URL: ${videoUrl}`,
+    "You are selecting the best YouTube Shorts moment from a long video transcript.",
+    "Find the most interesting, emotional, funny, action-heavy, surprising, or visually strong 30-45 second scene.",
+    "Create fresh metadata that is specific to this video. Do not reuse generic or repeated titles.",
+    "Return JSON only. No markdown. No explanation outside JSON.",
+    "Required JSON shape:",
+    '{"start":"00:04:50","duration":45,"title":"unique catchy title","description":"unique YouTube Shorts description","tags":["tag1","tag2","tag3"],"thumbnailText":"short catchy thumbnail text","reason":"why this scene is best"}',
+    "Rules:",
+    "- start must be HH:MM:SS.",
+    "- duration must be between 30 and 45 seconds.",
+    "- title max 90 characters and must be unique.",
+    "- description must be 2-4 sentences and mention this is a short clip.",
+    "- tags must be 8-15 short tags.",
+    "- thumbnailText must be 2-5 punchy words.",
+    `URL: ${job.videoUrl}`,
+    `Avoid these recent titles: ${recentTitles.length ? recentTitles.join(" | ") : "none"}`,
+    `Uniqueness seed: ${uniquenessSeed}`,
+    `Attempt: ${attempt}`,
+    "Transcript with timestamps:",
+    transcriptText,
   ].join("\n");
 
   const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
@@ -440,18 +504,15 @@ async function generateMetadata(videoUrl) {
     body: JSON.stringify({
       model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.7,
+      temperature: 0.95,
+      response_format: { type: "json_object" },
     }),
   });
 
   const content = response.choices?.[0]?.message?.content || "";
   const parsed = parseJsonFromText(content);
-  return {
-    title: clampText(parsed.title || "New short from a long video", 90),
-    description: parsed.description || "Auto-generated short. Posted by the channel owner or with permission.",
-    tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 15).map(String) : fallbackMetadata(videoUrl).tags,
-    thumbnailText: clampText(parsed.thumbnailText || "Watch This", 40),
-  };
+  if (!Object.keys(parsed).length) throw new Error(`AI returned invalid JSON: ${content.slice(0, 500)}`);
+  return parsed;
 }
 
 function parseJsonFromText(text) {
@@ -464,12 +525,73 @@ function parseJsonFromText(text) {
   }
 }
 
-function fallbackMetadata(videoUrl) {
+function normalizeScenePlan(plan, videoUrl) {
+  const start = normalizeTimestamp(plan.start);
+  const duration = Number(plan.duration);
+  if (!start) throw new Error(`AI returned invalid start timestamp: ${plan.start}`);
+  if (!Number.isFinite(duration) || duration < 30 || duration > 45) {
+    throw new Error(`AI returned invalid duration: ${plan.duration}`);
+  }
+
+  const fallback = fallbackMetadata(videoUrl);
+  const title = clampText(plan.title || fallback.title, 90);
+  if (!title) throw new Error("AI returned empty title.");
+
+  const description = clampText(plan.description || fallback.description, 4500);
+  const tags = Array.isArray(plan.tags) && plan.tags.length
+    ? plan.tags.map((tag) => clampText(tag, 40)).filter(Boolean).slice(0, 15)
+    : fallback.tags;
+
   return {
-    title: "Best moment from this video",
-    description: `Auto-generated short from ${videoUrl}\n\nPosted by the channel owner or with permission.`,
+    start,
+    duration: Math.round(duration),
+    reason: clampText(plan.reason || "AI selected the strongest transcript moment.", 500),
+    fallbackUsed: false,
+    metadata: {
+      title,
+      description,
+      tags,
+      thumbnailText: clampText(plan.thumbnailText || fallback.thumbnailText, 40),
+    },
+  };
+}
+
+function normalizeTimestamp(value) {
+  const text = String(value || "").trim();
+  if (/^\d{2}:\d{2}:\d{2}$/.test(text)) return text;
+  const short = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (short) return `00:${short[1].padStart(2, "0")}:${short[2]}`;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return secondsToTimestamp(seconds);
+  return null;
+}
+
+function secondsToTimestamp(totalSeconds) {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+function fallbackScenePlan(videoUrl, reason) {
+  const metadata = fallbackMetadata(videoUrl);
+  return {
+    start: SHORT_START,
+    duration: SHORT_DURATION,
+    reason,
+    fallbackUsed: true,
+    metadata,
+  };
+}
+
+function fallbackMetadata(videoUrl) {
+  const seed = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return {
+    title: clampText(`Must-watch short moment ${seed}`, 90),
+    description: `Auto-generated short clip from ${videoUrl}.\n\nFresh highlight ID: ${seed}. Posted by the channel owner or with permission.`,
     tags: ["shorts", "viral", "trending", "highlights", "youtube shorts", "creator", "clip", "video"],
-    thumbnailText: "Best Moment",
+    thumbnailText: "Watch This",
   };
 }
 
@@ -478,12 +600,144 @@ function clampText(value, max) {
   return text.length > max ? text.slice(0, max - 1).trim() : text;
 }
 
-async function prepareVideoAssets(job) {
+async function extractTranscript(job, jobDir) {
+  if (!isYouTubeUrl(job.videoUrl)) {
+    logJob(job, "Transcript not found: source is not a YouTube URL.");
+    return null;
+  }
+
+  try {
+    await requireTool("yt-dlp");
+    const transcriptBase = path.join(jobDir, "transcript");
+    const args = buildYtDlpTranscriptArgs(job.videoUrl, transcriptBase);
+    await runTool("yt-dlp", args, { timeoutMs: 2 * 60 * 1000, maxOutput: 4000 });
+    const transcriptFile = findTranscriptFile(jobDir);
+    if (!transcriptFile) return null;
+
+    const entries = parseVttTranscript(fs.readFileSync(transcriptFile, "utf8"));
+    if (!entries.length) return null;
+
+    const text = buildTranscriptPromptText(entries);
+    return { file: transcriptFile, entries, text };
+  } catch (error) {
+    logJob(job, `Transcript extraction error: ${friendlyYtDlpError(error)}`);
+    return null;
+  }
+}
+
+function buildYtDlpTranscriptArgs(videoUrl, transcriptBase) {
+  const args = [];
+  const cookiesPath = prepareWritableCookiesFile();
+
+  if (YTDLP_VERBOSE) args.push("-vU");
+
+  args.push(
+    "--skip-download",
+    "--write-subs",
+    "--write-auto-subs",
+    "--sub-langs",
+    TRANSCRIPT_LANGS,
+    "--sub-format",
+    "vtt",
+    "--convert-subs",
+    "vtt",
+    "--no-playlist",
+    "--force-ipv4",
+    "--retries",
+    "10",
+    "--fragment-retries",
+    "10",
+    "--js-runtimes",
+    YTDLP_JS_RUNTIME,
+    "--extractor-args",
+    "youtube:player_client=android,web",
+  );
+
+  if (cookiesPath) args.push("--cookies", cookiesPath);
+
+  args.push("-o", transcriptBase, videoUrl);
+  return args;
+}
+
+function findTranscriptFile(jobDir) {
+  return fs
+    .readdirSync(jobDir)
+    .filter((name) => /\.vtt$/i.test(name))
+    .map((name) => path.join(jobDir, name))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0] || null;
+}
+
+function parseVttTranscript(content) {
+  const blocks = content.replace(/\r/g, "").split(/\n{2,}/);
+  const entries = [];
+
+  for (const block of blocks) {
+    const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+    const timeIndex = lines.findIndex((line) => line.includes("-->"));
+    if (timeIndex === -1) continue;
+
+    const timeMatch = lines[timeIndex].match(/(\d{2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/);
+    if (!timeMatch) continue;
+
+    const text = cleanCaptionText(lines.slice(timeIndex + 1).join(" "));
+    if (!text) continue;
+
+    entries.push({
+      start: vttTimeToTimestamp(timeMatch[1]),
+      end: vttTimeToTimestamp(timeMatch[2]),
+      text,
+    });
+  }
+
+  return mergeTranscriptEntries(entries);
+}
+
+function mergeTranscriptEntries(entries) {
+  const merged = [];
+  for (const entry of entries) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.start === entry.start) {
+      previous.text = cleanCaptionText(`${previous.text} ${entry.text}`);
+    } else {
+      merged.push({ ...entry });
+    }
+  }
+  return merged;
+}
+
+function cleanCaptionText(value) {
+  return String(value)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function vttTimeToTimestamp(value) {
+  const parts = value.split(".");
+  const clock = parts[0];
+  if (/^\d{2}:\d{2}:\d{2}$/.test(clock)) return clock;
+  if (/^\d{2}:\d{2}$/.test(clock)) return `00:${clock}`;
+  return "00:00:00";
+}
+
+function buildTranscriptPromptText(entries) {
+  const lines = entries.map((entry) => `[${entry.start}] ${entry.text}`);
+  const fullTranscript = lines.join("\n");
+  if (fullTranscript.length <= 16000) return fullTranscript;
+
+  const maxLines = 220;
+  const step = Math.max(1, Math.ceil(lines.length / maxLines));
+  return lines.filter((_, index) => index % step === 0).join("\n").slice(0, 16000);
+}
+
+async function prepareVideoAssets(job, scenePlan, jobDir) {
   await requireTool("ffmpeg");
   await requireTool("ffprobe");
-
-  const jobDir = path.join(WORK_DIR, job.id);
-  fs.mkdirSync(jobDir, { recursive: true });
 
   const rawPath = path.join(jobDir, "source.mp4");
   const clipPath = path.join(jobDir, `clip-${Date.now()}.mp4`);
@@ -503,33 +757,33 @@ async function prepareVideoAssets(job) {
       logJob(job, `Warning: source video is ${Math.round(duration / 60)} minutes long, over the 2 hour guard.`);
     }
 
-    setJobProgress(job, "Cutting short clip", 38, `Cutting ${SHORT_DURATION}s clip from ${SHORT_START}.`);
+    setJobProgress(job, "Cutting short clip", 38, `Cutting ${scenePlan.duration}s clip from ${scenePlan.start}.`);
     await runTool("ffmpeg", [
       "-y",
       "-ss",
-      SHORT_START,
+      scenePlan.start,
       "-i",
       sourceInput,
       "-t",
-      String(SHORT_DURATION),
+      String(scenePlan.duration),
       "-c",
       "copy",
       clipPath,
     ], { timeoutMs: RENDER_TIMEOUT_MS });
 
-    setJobProgress(job, "Rendering vertical short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} vertical short with ultrafast preset.`);
+    setJobProgress(job, "Rendering vertical short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} vertical short with Vivid Warm filter.`);
     await runTool("ffmpeg", [
       "-y",
       "-i",
       clipPath,
       "-vf",
-      `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT}`,
+      vividWarmVideoFilter(),
       "-c:v",
       "libx264",
       "-preset",
-      "ultrafast",
+      SHORT_PRESET,
       "-crf",
-      "30",
+      SHORT_CRF,
       "-c:a",
       "aac",
       "-b:a",
@@ -540,13 +794,38 @@ async function prepareVideoAssets(job) {
       videoPath,
     ], { timeoutMs: RENDER_TIMEOUT_MS });
 
-    setJobProgress(job, "Rendering vertical short", 65, "Creating thumbnail from final short.");
-    await runTool("ffmpeg", ["-y", "-ss", "00:00:03", "-i", videoPath, "-frames:v", "1", thumbnailPath], { timeoutMs: RENDER_TIMEOUT_MS });
+    setJobProgress(job, "Rendering vertical short", 65, "Creating AI thumbnail from final short.");
+    await createThumbnail(videoPath, thumbnailPath, scenePlan.metadata.thumbnailText, job);
     return { jobDir, videoPath, thumbnailPath };
   } catch (error) {
     cleanupJobFiles(jobDir);
     throw error;
   }
+}
+
+function vividWarmVideoFilter() {
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},eq=saturation=1.25:contrast=1.08:brightness=0.03,colorbalance=rs=.08:gs=.03:bs=-.04`;
+}
+
+async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
+  const safeText = escapeDrawText(thumbnailText || "Watch This");
+  const filter = `${vividWarmVideoFilter()},drawbox=x=0:y=ih*0.68:w=iw:h=ih*0.20:color=black@0.45:t=fill,drawtext=text='${safeText}':fontcolor=white:fontsize=54:box=1:boxcolor=black@0.15:boxborderw=18:x=(w-text_w)/2:y=h*0.73`;
+  try {
+    await runTool("ffmpeg", ["-y", "-ss", "00:00:03", "-i", videoPath, "-vf", filter, "-frames:v", "1", thumbnailPath], { timeoutMs: RENDER_TIMEOUT_MS });
+    logJob(job, `AI thumbnail text: ${thumbnailText || "Watch This"}`);
+  } catch (error) {
+    logJob(job, `AI thumbnail text overlay failed, using clean frame: ${error.message}`);
+    await runTool("ffmpeg", ["-y", "-ss", "00:00:03", "-i", videoPath, "-frames:v", "1", thumbnailPath], { timeoutMs: RENDER_TIMEOUT_MS });
+  }
+}
+
+function escapeDrawText(value) {
+  return clampText(value, 40)
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
 }
 
 function isSupportedSourceUrl(value) {

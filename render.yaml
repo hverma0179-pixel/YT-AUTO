@@ -31,6 +31,12 @@ services:
         value: 720
       - key: SHORT_HEIGHT
         value: 1280
+      - key: SHORT_PRESET
+        value: veryfast
+      - key: SHORT_CRF
+        value: 28
+      - key: TRANSCRIPT_LANGS
+        value: en.*,en
       - key: RENDER_TIMEOUT_MS
         value: 600000
       - key: UPLOAD_CHUNK_SIZE
