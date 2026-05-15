@@ -199,7 +199,7 @@ function renderJobs(jobs) {
 function renderJob(job) {
   const progress = getDisplayProgress(job);
   const stage = getStage(job);
-  const latestLog = (job.logs || [])[0] || "Waiting for the next scheduled run.";
+  const latestLog = job.error || (job.logs || [])[0] || "Waiting for the next scheduled run.";
   const upload = job.lastUploadId
     ? `<a class="upload-link" href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">View uploaded video</a>`
     : '<span class="pending-upload">No upload yet</span>';
@@ -230,7 +230,7 @@ function renderJob(job) {
         <span>${upload}</span>
       </div>
       <div class="job-actions">
-        <button class="soft-button" type="button" data-run-id="${escapeHtml(job.id)}">Run now</button>
+        <button class="soft-button" type="button" data-run-id="${escapeHtml(job.id)}">${job.status === "failed" ? "Retry" : "Run now"}</button>
       </div>
       <ul class="log-list">${logs || "<li>No logs yet.</li>"}</ul>
     </article>
@@ -270,7 +270,9 @@ function renderUploads(jobs) {
 }
 
 function renderLogs(jobs) {
-  const entries = jobs.flatMap((job) => (job.logs || []).map((log) => ({ job, log }))).slice(0, 12);
+  const entries = jobs
+    .flatMap((job) => [job.error, ...(job.logs || [])].filter(Boolean).map((log) => ({ job, log })))
+    .slice(0, 12);
 
   if (!entries.length) {
     logsList.innerHTML = '<div class="empty-state">No logs yet. Run an automation to see activity here.</div>';
@@ -348,6 +350,14 @@ function updateVisibleProgress() {
 }
 
 function getStage(job) {
+  if (job.stage) {
+    const stage = String(job.stage);
+    if (stage === "Completed") return { label: "Completed", statusText: "Published" };
+    if (stage === "Failed") return { label: "Failed", statusText: "Failed" };
+    if (job.status === "running") return { label: stage, statusText: "Processing" };
+    return { label: stage, statusText: job.status === "scheduled" ? "Scheduled" : stage };
+  }
+
   const logs = (job.logs || []).join(" ").toLowerCase();
   if (job.status === "failed") return { label: "Failed", statusText: "Failed" };
   if (job.lastUploadId || logs.includes("upload complete")) return { label: "Completed", statusText: "Published" };
@@ -366,6 +376,10 @@ function getStage(job) {
 }
 
 function getProgress(job) {
+  if (Number.isFinite(Number(job.progress))) {
+    return { percent: Number(job.progress), label: getStage(job).label };
+  }
+
   const stage = getStage(job).label;
   if (stage === "Failed") return { percent: 100, label: stage };
   if (stage === "Completed") return { percent: 100, label: stage };
