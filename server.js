@@ -740,7 +740,7 @@ async function logToolStatus() {
 async function uploadToYouTube(userId, videoPath, thumbnailPath, metadata, job) {
   const token = await getFreshGoogleToken(userId);
   const stats = fs.statSync(videoPath);
-  const privacyStatus = process.env.YOUTUBE_PRIVACY_STATUS || "private";
+  const privacyStatus = process.env.YOUTUBE_PRIVACY_STATUS || "public";
 
   setJobProgress(job, "Uploading to YouTube", 72, "Preparing upload.");
   const initResponse = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
