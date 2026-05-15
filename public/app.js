@@ -41,7 +41,7 @@ async function boot() {
     const me = await api("/api/me");
     showApp(me.user);
     await loadJobs({ silent: true });
-    jobsPoll = setInterval(() => loadJobs({ silent: true }), 4000);
+    jobsPoll = setInterval(() => loadJobs({ silent: true }), 3000);
   } catch {
     showAuth();
   }
@@ -352,8 +352,12 @@ function getStage(job) {
   if (job.status === "failed") return { label: "Failed", statusText: "Failed" };
   if (job.lastUploadId || logs.includes("upload complete")) return { label: "Completed", statusText: "Published" };
   if (job.status === "running") {
+    if (isLongRunning(job)) return { label: "Taking longer than 10 minutes - check server logs", statusText: "Processing" };
     if (logs.includes("uploading")) return { label: "Uploading to YouTube", statusText: "Processing" };
-    if (logs.includes("preparing") || logs.includes("vertical short") || logs.includes("thumbnail")) return { label: "Rendering short", statusText: "Processing" };
+    if (logs.includes("cutting") || logs.includes("clip")) return { label: "Cutting short clip", statusText: "Processing" };
+    if (logs.includes("rendering") || logs.includes("preparing") || logs.includes("vertical short") || logs.includes("thumbnail")) {
+      return { label: "Rendering vertical short", statusText: "Processing" };
+    }
     if (logs.includes("metadata")) return { label: "Generating AI metadata", statusText: "Processing" };
     if (logs.includes("download") || logs.includes("yt-dlp")) return { label: "Downloading video", statusText: "Processing" };
     return { label: "Starting", statusText: "Processing" };
@@ -366,11 +370,23 @@ function getProgress(job) {
   if (stage === "Failed") return { percent: 100, label: stage };
   if (stage === "Completed") return { percent: 100, label: stage };
   if (stage === "Uploading to YouTube") return { percent: 82, label: stage };
-  if (stage === "Rendering short") return { percent: 58, label: stage };
+  if (stage === "Rendering vertical short") return { percent: 58, label: stage };
+  if (stage === "Cutting short clip") return { percent: 46, label: stage };
   if (stage === "Generating AI metadata") return { percent: 32, label: stage };
   if (stage === "Downloading video") return { percent: 18, label: stage };
   if (stage === "Starting") return { percent: 8, label: stage };
+  if (stage.includes("Taking longer")) return { percent: 98.7, label: stage };
   return { percent: 0, label: stage };
+}
+
+function isLongRunning(job) {
+  if (job.status !== "running") return false;
+  const newestLog = (job.logs || [])[0];
+  if (!newestLog) return false;
+  const timestamp = newestLog.split(" - ")[0];
+  const logTime = new Date(timestamp).getTime();
+  if (!Number.isFinite(logTime)) return false;
+  return Date.now() - logTime > 10 * 60 * 1000;
 }
 
 function getDisplayProgress(job) {

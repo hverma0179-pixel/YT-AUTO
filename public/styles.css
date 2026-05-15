@@ -219,8 +219,10 @@ button:disabled {
 
 .app-view {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 .sidebar {
@@ -291,8 +293,10 @@ button:disabled {
 }
 
 .workspace {
-  width: min(1280px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
   padding: 28px;
 }
 
@@ -535,19 +539,22 @@ input:focus {
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 22px;
+  gap: 24px;
   align-items: start;
+  min-width: 0;
 }
 
 .main-column,
 .right-rail {
   display: grid;
   gap: 22px;
+  min-width: 0;
 }
 
 .right-rail {
-  position: sticky;
-  top: 112px;
+  position: static;
+  width: 320px;
+  max-width: 100%;
 }
 
 .panel-card {
@@ -604,6 +611,7 @@ input:focus {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .status-pill {
@@ -885,12 +893,14 @@ input:focus {
 
   .right-rail {
     position: static;
+    width: 100%;
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 768px) {
   .app-view {
-    display: block;
+    display: flex;
+    flex-direction: column;
   }
 
   .sidebar,
