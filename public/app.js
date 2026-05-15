@@ -12,6 +12,9 @@ const runningJobs = document.querySelector("#runningJobs");
 const uploadedJobs = document.querySelector("#uploadedJobs");
 
 let jobsPoll = null;
+let progressTicker = null;
+let latestJobs = [];
+const animatedProgress = new Map();
 
 boot();
 
@@ -30,6 +33,7 @@ function showAuth() {
   authView.classList.remove("hidden");
   appView.classList.add("hidden");
   if (jobsPoll) clearInterval(jobsPoll);
+  if (progressTicker) clearInterval(progressTicker);
 }
 
 function showApp(user) {
@@ -74,7 +78,10 @@ logoutButton.addEventListener("click", async () => {
 
 async function loadJobs() {
   const data = await api("/api/jobs");
+  latestJobs = data.jobs || [];
+  syncAnimatedProgress(latestJobs);
   renderJobs(data.jobs || []);
+  startProgressTicker();
 }
 
 function renderJobs(jobs) {
@@ -96,6 +103,61 @@ function renderJobs(jobs) {
   }
 }
 
+function startProgressTicker() {
+  if (progressTicker) return;
+  progressTicker = setInterval(() => {
+    if (!latestJobs.some((job) => job.status === "running")) return;
+    advanceRunningProgress(latestJobs);
+    updateVisibleProgress();
+  }, 1000);
+}
+
+function syncAnimatedProgress(jobs) {
+  const activeIds = new Set(jobs.map((job) => job.id));
+
+  for (const id of animatedProgress.keys()) {
+    if (!activeIds.has(id)) animatedProgress.delete(id);
+  }
+
+  for (const job of jobs) {
+    const progress = getProgress(job);
+    const current = animatedProgress.get(job.id);
+
+    if (!current || job.status !== "running") {
+      animatedProgress.set(job.id, progress.percent);
+      continue;
+    }
+
+    animatedProgress.set(job.id, Math.max(current, progress.percent));
+  }
+}
+
+function advanceRunningProgress(jobs) {
+  for (const job of jobs) {
+    if (job.status !== "running") continue;
+
+    const stage = getProgress(job);
+    const current = animatedProgress.get(job.id) ?? stage.percent;
+    const cap = getProgressCap(stage.percent);
+    const next = Math.min(cap, current + getProgressStep(stage.percent));
+    animatedProgress.set(job.id, Number(next.toFixed(1)));
+  }
+}
+
+function updateVisibleProgress() {
+  for (const job of latestJobs) {
+    const card = jobsList.querySelector(`[data-job-id="${cssEscape(job.id)}"]`);
+    if (!card) continue;
+
+    const progress = getDisplayProgress(job);
+    const text = card.querySelector("[data-progress-text]");
+    const fill = card.querySelector("[data-progress-fill]");
+
+    if (text) text.textContent = `${formatPercent(progress.percent)} complete`;
+    if (fill) fill.style.width = `${progress.percent}%`;
+  }
+}
+
 function updateStats(jobs) {
   if (totalJobs) totalJobs.textContent = jobs.length;
   if (runningJobs) runningJobs.textContent = jobs.filter((job) => job.status === "running").length;
@@ -104,14 +166,14 @@ function updateStats(jobs) {
 
 function renderJob(job) {
   const logs = (job.logs || []).slice(0, 5).map((log) => `<li>${escapeHtml(log)}</li>`).join("");
-  const progress = getProgress(job);
+  const progress = getDisplayProgress(job);
   const latestLog = (job.logs || [])[0] || "Waiting for the next scheduled run.";
   const upload = job.lastUploadId
     ? `<a class="upload-link" href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">View uploaded video</a>`
     : '<span class="pending-upload">No upload yet</span>';
 
   return `
-    <article class="job-card">
+    <article class="job-card" data-job-id="${escapeHtml(job.id)}">
       <div class="job-card-header">
         <div>
           <strong>Daily at ${escapeHtml(job.dailyAt)}</strong>
@@ -121,11 +183,11 @@ function renderJob(job) {
       </div>
       <div class="progress-panel" aria-label="Job progress">
         <div class="progress-copy">
-          <strong>${progress.percent}% complete</strong>
+          <strong data-progress-text>${formatPercent(progress.percent)} complete</strong>
           <span>${escapeHtml(progress.label)}</span>
         </div>
         <div class="progress-track">
-          <div class="progress-fill ${escapeHtml(job.status)}" style="width: ${progress.percent}%"></div>
+          <div class="progress-fill ${escapeHtml(job.status)}" data-progress-fill style="width: ${progress.percent}%"></div>
         </div>
         <p class="latest-log">${escapeHtml(latestLog)}</p>
       </div>
@@ -163,6 +225,39 @@ function getProgress(job) {
   }
 
   return { percent: 0, label: "Scheduled" };
+}
+
+function getDisplayProgress(job) {
+  const progress = getProgress(job);
+  if (job.status !== "running") return progress;
+
+  const animated = animatedProgress.get(job.id) ?? progress.percent;
+  return { ...progress, percent: Number(Math.max(progress.percent, animated).toFixed(1)) };
+}
+
+function getProgressCap(stagePercent) {
+  if (stagePercent >= 82) return 98.7;
+  if (stagePercent >= 58) return 81.9;
+  if (stagePercent >= 32) return 57.9;
+  return 31.9;
+}
+
+function getProgressStep(stagePercent) {
+  if (stagePercent >= 82) return 0.7;
+  if (stagePercent >= 58) return 1.1;
+  if (stagePercent >= 32) return 1.2;
+  return 1.1;
+}
+
+function formatPercent(value) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return "0.0%";
+  return `${percent.toFixed(1)}%`;
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 function setFormMessage(message, type) {
