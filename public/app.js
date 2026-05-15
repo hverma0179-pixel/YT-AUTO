@@ -368,6 +368,9 @@ function getStage(job) {
     if (logs.includes("rendering") || logs.includes("preparing") || logs.includes("vertical short") || logs.includes("thumbnail")) {
       return { label: "Rendering vertical short", statusText: "Processing" };
     }
+    if (logs.includes("transcript") || logs.includes("best scene") || logs.includes("selected timestamp")) {
+      return { label: "Analyzing transcript", statusText: "Processing" };
+    }
     if (logs.includes("metadata")) return { label: "Generating AI metadata", statusText: "Processing" };
     if (logs.includes("download") || logs.includes("yt-dlp")) return { label: "Downloading video", statusText: "Processing" };
     return { label: "Starting", statusText: "Processing" };
@@ -387,6 +390,7 @@ function getProgress(job) {
   if (stage === "Rendering vertical short") return { percent: 58, label: stage };
   if (stage === "Cutting short clip") return { percent: 46, label: stage };
   if (stage === "Generating AI metadata") return { percent: 32, label: stage };
+  if (stage === "Analyzing transcript") return { percent: 12, label: stage };
   if (stage === "Downloading video") return { percent: 18, label: stage };
   if (stage === "Starting") return { percent: 8, label: stage };
   if (stage.includes("Taking longer")) return { percent: 98.7, label: stage };
