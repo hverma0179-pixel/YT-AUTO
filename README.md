@@ -22,6 +22,7 @@ Important: only process videos you own or have clear rights to reuse. YouTube an
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_REDIRECT_URI`
    - `OPENROUTER_API_KEY`
+   - `SESSION_MAX_AGE_SECONDS` controls how long Google login stays active. Default is 30 days.
 3. Install command-line tools used by the video pipeline:
    - `yt-dlp`
    - `ffmpeg`

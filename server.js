@@ -14,6 +14,8 @@ const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_BASE_URL}/auth/callback`;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const WORK_DIR = process.env.WORK_DIR || path.join(os.tmpdir(), "autoshorts-work");
+const SESSION_MAX_AGE_SECONDS = Number(process.env.SESSION_MAX_AGE_SECONDS || 30 * 24 * 60 * 60);
+const SESSION_COOKIE_SECURE = APP_BASE_URL.startsWith("https://");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -207,6 +209,7 @@ function getCookies(req) {
 function setCookie(res, name, value, options = {}) {
   const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax"];
   if (options.maxAge === 0) parts.push("Max-Age=0");
+  if (options.maxAge && options.maxAge > 0) parts.push(`Max-Age=${Math.floor(options.maxAge)}`);
   if (options.secure) parts.push("Secure");
   res.setHeader("set-cookie", parts.join("; "));
 }
@@ -214,7 +217,13 @@ function setCookie(res, name, value, options = {}) {
 function getSession(req) {
   const sid = getCookies(req).sid;
   if (!sid || !store.sessions[sid]) return null;
-  return store.sessions[sid];
+  const session = store.sessions[sid];
+  if (session.expiresAt && new Date(session.expiresAt).getTime() <= Date.now()) {
+    delete store.sessions[sid];
+    saveStore();
+    return null;
+  }
+  return session;
 }
 
 function requireConfig(keys) {
@@ -279,12 +288,13 @@ async function finishGoogleAuth(req, res, url) {
   };
 
   const sid = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
   store.users[user.id] = user;
-  store.sessions[sid] = { user, createdAt: new Date().toISOString() };
+  store.sessions[sid] = { user, createdAt: new Date().toISOString(), expiresAt };
   store.tokens[user.id] = normalizeToken(token);
   saveStore();
 
-  setCookie(res, "sid", sid);
+  setCookie(res, "sid", sid, { maxAge: SESSION_MAX_AGE_SECONDS, secure: SESSION_COOKIE_SECURE });
   redirect(res, "/");
 }
 
@@ -292,7 +302,7 @@ function logout(req, res) {
   const sid = getCookies(req).sid;
   if (sid) delete store.sessions[sid];
   saveStore();
-  setCookie(res, "sid", "", { maxAge: 0 });
+  setCookie(res, "sid", "", { maxAge: 0, secure: SESSION_COOKIE_SECURE });
   sendJson(res, 200, { ok: true });
 }
 
