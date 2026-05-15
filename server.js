@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const http = require("node:http");
+const https = require("node:https");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
@@ -12,12 +13,21 @@ const HOST = process.env.HOST || "0.0.0.0";
 const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_BASE_URL}/auth/callback`;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
-const WORK_DIR = process.env.WORK_DIR || path.join(__dirname, "work");
+const WORK_DIR = process.env.WORK_DIR || path.join(os.tmpdir(), "autoshorts-work");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_BODY_BYTES = 1024 * 1024;
+const SHORT_START = process.env.SHORT_START || "00:01:00";
+const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
+const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 720);
+const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1280);
+const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
+const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
+const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
+const MAX_SOURCE_DURATION_SECONDS = Number(process.env.MAX_SOURCE_DURATION_SECONDS || 2 * 60 * 60);
 const TOOL_COMMANDS = {
   ffmpeg: process.env.FFMPEG_PATH || "ffmpeg",
+  ffprobe: process.env.FFPROBE_PATH || "ffprobe",
   "yt-dlp": process.env.YTDLP_PATH || "yt-dlp",
 };
 const YTDLP_JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node:/usr/local/bin/node";
@@ -25,6 +35,7 @@ const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || "./cookies.txt";
 const YTDLP_VERBOSE = String(process.env.YTDLP_VERBOSE || "").toLowerCase() === "true";
 const TOOL_VERSION_ARGS = {
   ffmpeg: ["-version"],
+  ffprobe: ["-version"],
   "yt-dlp": ["--version"],
 };
 
@@ -310,6 +321,9 @@ function createJob(res, user, body) {
     videoUrl,
     dailyAt,
     status: "scheduled",
+    stage: "Queued",
+    progress: 0,
+    error: null,
     nextRunAt: nextDailyRun(dailyAt).toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -342,14 +356,21 @@ function runDueJobs() {
 function queueJob(job, reason) {
   if (job.status === "running") return;
   job.status = "running";
+  job.stage = "Queued";
+  job.progress = 1;
+  job.error = null;
   job.updatedAt = new Date().toISOString();
   logJob(job, reason);
+  setJobProgress(job, "Queued", 1, "Job queued.");
   saveStore();
 
   runPipeline(job).catch((error) => {
     job.status = "failed";
+    job.stage = "Failed";
+    job.progress = 100;
+    job.error = friendlyPipelineError(error);
     job.updatedAt = new Date().toISOString();
-    logJob(job, friendlyPipelineError(error));
+    logJob(job, job.error);
     saveStore();
   });
 }
@@ -358,27 +379,42 @@ async function runPipeline(job) {
   const user = store.users[job.userId];
   if (!user) throw new Error("User no longer exists.");
 
-  logJob(job, "Generating AI metadata.");
-  const metadata = await generateMetadata(job.videoUrl);
+  let assets;
 
-  logJob(job, "Preparing vertical short and thumbnail.");
-  const assets = await prepareVideoAssets(job);
+  try {
+    assets = await prepareVideoAssets(job);
 
-  logJob(job, "Uploading short to YouTube.");
-  const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, metadata);
+    setJobProgress(job, "Generating metadata", 70, "Generating AI metadata.");
+    const metadata = await generateMetadata(job.videoUrl);
 
-  job.status = "scheduled";
-  job.lastRunAt = new Date().toISOString();
-  job.lastUploadId = uploadId;
-  job.nextRunAt = nextDailyRun(job.dailyAt).toISOString();
-  job.updatedAt = new Date().toISOString();
-  logJob(job, `Upload complete: https://youtube.com/watch?v=${uploadId}`);
-  saveStore();
+    const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, metadata, job);
+
+    job.status = "scheduled";
+    job.stage = "Completed";
+    job.progress = 100;
+    job.error = null;
+    job.lastRunAt = new Date().toISOString();
+    job.lastUploadId = uploadId;
+    job.nextRunAt = nextDailyRun(job.dailyAt).toISOString();
+    job.updatedAt = new Date().toISOString();
+    logJob(job, `Upload complete: https://youtube.com/watch?v=${uploadId}`);
+    saveStore();
+  } finally {
+    if (assets?.jobDir) cleanupJobFiles(assets.jobDir);
+  }
 }
 
 function logJob(job, message) {
   const line = `${new Date().toLocaleString()} - ${message}`;
   job.logs = [line, ...(job.logs || [])].slice(0, 50);
+}
+
+function setJobProgress(job, stage, progress, message) {
+  job.stage = stage;
+  job.progress = Math.max(0, Math.min(100, Number(progress) || 0));
+  job.updatedAt = new Date().toISOString();
+  if (message) logJob(job, message);
+  saveStore();
 }
 
 async function generateMetadata(videoUrl) {
@@ -444,45 +480,106 @@ function clampText(value, max) {
 
 async function prepareVideoAssets(job) {
   await requireTool("ffmpeg");
+  await requireTool("ffprobe");
 
   const jobDir = path.join(WORK_DIR, job.id);
   fs.mkdirSync(jobDir, { recursive: true });
 
   const rawPath = path.join(jobDir, "source.mp4");
+  const clipPath = path.join(jobDir, `clip-${Date.now()}.mp4`);
   const videoPath = path.join(jobDir, `short-${Date.now()}.mp4`);
   const thumbnailPath = path.join(jobDir, `thumbnail-${Date.now()}.jpg`);
   const sourceInput = isDirectVideoUrl(job.videoUrl) ? job.videoUrl : rawPath;
 
-  if (isYouTubeUrl(job.videoUrl)) {
-    await requireTool("yt-dlp");
-    await runYtDlp(job.videoUrl, rawPath);
+  try {
+    if (isYouTubeUrl(job.videoUrl)) {
+      await requireTool("yt-dlp");
+      setJobProgress(job, "Downloading video", 10, "Downloading video source at Shorts-friendly quality.");
+      await runYtDlp(job.videoUrl, rawPath);
+    }
+
+    const duration = await getVideoDuration(sourceInput);
+    if (duration && duration > MAX_SOURCE_DURATION_SECONDS) {
+      logJob(job, `Warning: source video is ${Math.round(duration / 60)} minutes long, over the 2 hour guard.`);
+    }
+
+    setJobProgress(job, "Cutting short clip", 38, `Cutting ${SHORT_DURATION}s clip from ${SHORT_START}.`);
+    await runTool("ffmpeg", [
+      "-y",
+      "-ss",
+      SHORT_START,
+      "-i",
+      sourceInput,
+      "-t",
+      String(SHORT_DURATION),
+      "-c",
+      "copy",
+      clipPath,
+    ], { timeoutMs: RENDER_TIMEOUT_MS });
+
+    setJobProgress(job, "Rendering vertical short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} vertical short with ultrafast preset.`);
+    await runTool("ffmpeg", [
+      "-y",
+      "-i",
+      clipPath,
+      "-vf",
+      `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT}`,
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-crf",
+      "30",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-shortest",
+      "-movflags",
+      "+faststart",
+      videoPath,
+    ], { timeoutMs: RENDER_TIMEOUT_MS });
+
+    setJobProgress(job, "Rendering vertical short", 65, "Creating thumbnail from final short.");
+    await runTool("ffmpeg", ["-y", "-ss", "00:00:03", "-i", videoPath, "-frames:v", "1", thumbnailPath], { timeoutMs: RENDER_TIMEOUT_MS });
+    return { jobDir, videoPath, thumbnailPath };
+  } catch (error) {
+    cleanupJobFiles(jobDir);
+    throw error;
   }
-
-  await runTool("ffmpeg", [
-    "-y",
-    "-ss",
-    "00:00:00",
-    "-i",
-    sourceInput,
-    "-t",
-    "58",
-    "-vf",
-    "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-    "-c:v",
-    "libx264",
-    "-c:a",
-    "aac",
-    "-movflags",
-    "+faststart",
-    videoPath,
-  ]);
-
-  await runTool("ffmpeg", ["-y", "-ss", "00:00:03", "-i", videoPath, "-frames:v", "1", thumbnailPath]);
-  return { videoPath, thumbnailPath };
 }
 
 function isSupportedSourceUrl(value) {
   return isYouTubeUrl(value) || isDirectVideoUrl(value);
+}
+
+async function getVideoDuration(inputPath) {
+  try {
+    const output = await runTool("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      inputPath,
+    ], { timeoutMs: 30 * 1000, maxOutput: 2000 });
+    const duration = Number(output.trim());
+    return Number.isFinite(duration) ? duration : null;
+  } catch (error) {
+    console.warn(`Duration check skipped: ${error.message}`);
+    return null;
+  }
+}
+
+function cleanupJobFiles(jobDir) {
+  try {
+    if (jobDir && jobDir.startsWith(WORK_DIR) && fs.existsSync(jobDir)) {
+      fs.rmSync(jobDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    console.warn(`Cleanup failed: ${error.message}`);
+  }
 }
 
 function isYouTubeUrl(value) {
@@ -511,12 +608,6 @@ function buildYtDlpArgs(videoUrl, outputPath) {
   args.push(
     "--no-playlist",
     "--force-ipv4",
-    "--sleep-requests",
-    "8",
-    "--sleep-interval",
-    "8",
-    "--max-sleep-interval",
-    "20",
     "--retries",
     "10",
     "--fragment-retries",
@@ -529,7 +620,18 @@ function buildYtDlpArgs(videoUrl, outputPath) {
 
   args.push("--cookies", cookiesPath);
 
-  args.push("-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", outputPath, videoUrl);
+  args.push(
+    "-f",
+    "bv*[height<=720]+ba/b[height<=720]/best[height<=720]",
+    "--merge-output-format",
+    "mp4",
+    "--no-write-subs",
+    "--no-write-auto-subs",
+    "--no-write-thumbnail",
+    "-o",
+    outputPath,
+    videoUrl,
+  );
   return args;
 }
 
@@ -588,6 +690,15 @@ function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
     let output = "";
+    let settled = false;
+    const timeout = options.timeoutMs
+      ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          child.kill("SIGKILL");
+          reject(new Error(`${command} timed out after ${Math.round(options.timeoutMs / 1000)} seconds`));
+        }, options.timeoutMs)
+      : null;
 
     child.stdout.on("data", (chunk) => {
       output += chunk.toString();
@@ -599,8 +710,16 @@ function runCommand(command, args, options = {}) {
       if (options.maxOutput && output.length > options.maxOutput) output = output.slice(0, options.maxOutput);
     });
 
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
       if (code === 0) return resolve(output);
       reject(new Error(`${command} failed with code ${code}: ${output.slice(-1200)}`));
     });
@@ -608,7 +727,7 @@ function runCommand(command, args, options = {}) {
 }
 
 async function logToolStatus() {
-  for (const name of ["ffmpeg", "yt-dlp"]) {
+  for (const name of ["ffmpeg", "ffprobe", "yt-dlp"]) {
     try {
       const output = await runTool(name, TOOL_VERSION_ARGS[name] || ["--version"], { maxOutput: 300 });
       console.log(`${name} ready: ${output.split(/\r?\n/)[0]}`);
@@ -618,11 +737,12 @@ async function logToolStatus() {
   }
 }
 
-async function uploadToYouTube(userId, videoPath, thumbnailPath, metadata) {
+async function uploadToYouTube(userId, videoPath, thumbnailPath, metadata, job) {
   const token = await getFreshGoogleToken(userId);
   const stats = fs.statSync(videoPath);
   const privacyStatus = process.env.YOUTUBE_PRIVACY_STATUS || "private";
 
+  setJobProgress(job, "Uploading to YouTube", 72, "Preparing upload.");
   const initResponse = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
     method: "POST",
     headers: {
@@ -652,22 +772,101 @@ async function uploadToYouTube(userId, videoPath, thumbnailPath, metadata) {
   const uploadUrl = initResponse.headers.get("location");
   if (!uploadUrl) throw new Error("YouTube did not return a resumable upload URL.");
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "content-length": String(stats.size),
-      "content-type": "video/mp4",
-    },
-    body: fs.readFileSync(videoPath),
-  });
-
-  if (!uploadResponse.ok) {
-    throw new Error(`YouTube video upload failed: ${await uploadResponse.text()}`);
-  }
-
-  const uploaded = await uploadResponse.json();
+  setJobProgress(job, "Uploading to YouTube", 74, "Upload started.");
+  const uploaded = await uploadVideoInChunks(uploadUrl, videoPath, stats.size, job);
+  if (!uploaded.id) throw new Error(`YouTube upload completed but did not return a video id: ${JSON.stringify(uploaded).slice(0, 500)}`);
+  setJobProgress(job, "Uploading to YouTube", 97, "Upload completed, setting thumbnail.");
   await uploadThumbnail(token.access_token, uploaded.id, thumbnailPath);
   return uploaded.id;
+}
+
+async function uploadVideoInChunks(uploadUrl, videoPath, totalBytes, job) {
+  let start = 0;
+  let lastProgress = 0;
+
+  while (start < totalBytes) {
+    const end = Math.min(start + UPLOAD_CHUNK_SIZE - 1, totalBytes - 1);
+    const chunkSize = end - start + 1;
+    const response = await putUploadChunkWithRetry(uploadUrl, videoPath, start, end, totalBytes, chunkSize);
+
+    if (response.statusCode === 308) {
+      start = parseUploadedRange(response.headers.range, end) + 1;
+      const uploadPercent = Math.floor((start / totalBytes) * 100);
+      if (uploadPercent >= lastProgress + 5 || uploadPercent === 100) {
+        lastProgress = uploadPercent;
+        setJobProgress(job, "Uploading to YouTube", 74 + Math.min(22, Math.floor(uploadPercent * 0.22)), `Upload progress ${uploadPercent}%.`);
+      }
+      continue;
+    }
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      setJobProgress(job, "Uploading to YouTube", 96, "Upload progress 100%.");
+      return JSON.parse(response.body || "{}");
+    }
+
+    throw new Error(`YouTube upload failed with ${response.statusCode}: ${response.body}`);
+  }
+
+  throw new Error("YouTube upload ended before returning a video id.");
+}
+
+async function putUploadChunkWithRetry(uploadUrl, videoPath, start, end, totalBytes, chunkSize) {
+  let lastError;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const response = await putUploadChunk(uploadUrl, videoPath, start, end, totalBytes, chunkSize);
+      if (response.statusCode >= 500 || response.statusCode === 429) {
+        throw new Error(`retryable upload response ${response.statusCode}: ${response.body}`);
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 5) break;
+      await delay(1000 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+function putUploadChunk(uploadUrl, videoPath, start, end, totalBytes, chunkSize) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(uploadUrl);
+    const request = https.request(
+      {
+        method: "PUT",
+        hostname: parsed.hostname,
+        path: `${parsed.pathname}${parsed.search}`,
+        headers: {
+          "content-length": String(chunkSize),
+          "content-type": "video/mp4",
+          "content-range": `bytes ${start}-${end}/${totalBytes}`,
+        },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => resolve({ statusCode: response.statusCode, headers: response.headers, body }));
+      },
+    );
+
+    request.setTimeout(UPLOAD_TIMEOUT_MS, () => {
+      request.destroy(new Error(`YouTube upload chunk timed out after ${Math.round(UPLOAD_TIMEOUT_MS / 1000)} seconds`));
+    });
+    request.on("error", reject);
+    fs.createReadStream(videoPath, { start, end }).pipe(request);
+  });
+}
+
+function parseUploadedRange(rangeHeader, fallbackEnd) {
+  const match = String(rangeHeader || "").match(/bytes=0-(\d+)/);
+  return match ? Number(match[1]) : fallbackEnd;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function uploadThumbnail(accessToken, videoId, thumbnailPath) {

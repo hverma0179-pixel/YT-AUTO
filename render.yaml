@@ -23,3 +23,19 @@ services:
         value: private
       - key: OPENROUTER_MODEL
         value: openai/gpt-4o-mini
+      - key: SHORT_START
+        value: 00:01:00
+      - key: SHORT_DURATION
+        value: 45
+      - key: SHORT_WIDTH
+        value: 720
+      - key: SHORT_HEIGHT
+        value: 1280
+      - key: RENDER_TIMEOUT_MS
+        value: 600000
+      - key: UPLOAD_CHUNK_SIZE
+        value: 8388608
+      - key: UPLOAD_TIMEOUT_MS
+        value: 600000
+      - key: MAX_SOURCE_DURATION_SECONDS
+        value: 7200
