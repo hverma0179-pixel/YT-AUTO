@@ -7,6 +7,9 @@ const refreshButton = document.querySelector("#refreshButton");
 const logoutButton = document.querySelector("#logoutButton");
 const userName = document.querySelector("#userName");
 const avatar = document.querySelector("#avatar");
+const totalJobs = document.querySelector("#totalJobs");
+const runningJobs = document.querySelector("#runningJobs");
+const uploadedJobs = document.querySelector("#uploadedJobs");
 
 let jobsPoll = null;
 
@@ -42,7 +45,7 @@ function showApp(user) {
 
 jobForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  formMessage.textContent = "Creating automation...";
+  setFormMessage("Creating automation...", "loading");
 
   const body = {
     videoUrl: jobForm.videoUrl.value,
@@ -55,10 +58,10 @@ jobForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(body),
     });
     jobForm.videoUrl.value = "";
-    formMessage.textContent = "Automation created. The server will post once daily.";
+    setFormMessage("Automation created. The server will post once daily.", "success");
     await loadJobs();
   } catch (error) {
-    formMessage.textContent = error.message;
+    setFormMessage(error.message, "error");
   }
 });
 
@@ -75,6 +78,8 @@ async function loadJobs() {
 }
 
 function renderJobs(jobs) {
+  updateStats(jobs);
+
   if (!jobs.length) {
     jobsList.innerHTML = '<div class="empty-state">No automations yet. Paste a video URL above to create the first one.</div>';
     return;
@@ -91,11 +96,19 @@ function renderJobs(jobs) {
   }
 }
 
+function updateStats(jobs) {
+  if (totalJobs) totalJobs.textContent = jobs.length;
+  if (runningJobs) runningJobs.textContent = jobs.filter((job) => job.status === "running").length;
+  if (uploadedJobs) uploadedJobs.textContent = jobs.filter((job) => job.lastUploadId).length;
+}
+
 function renderJob(job) {
   const logs = (job.logs || []).slice(0, 5).map((log) => `<li>${escapeHtml(log)}</li>`).join("");
+  const progress = getProgress(job);
+  const latestLog = (job.logs || [])[0] || "Waiting for the next scheduled run.";
   const upload = job.lastUploadId
-    ? `<a href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">Last upload</a>`
-    : "No upload yet";
+    ? `<a class="upload-link" href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">View uploaded video</a>`
+    : '<span class="pending-upload">No upload yet</span>';
 
   return `
     <article class="job-card">
@@ -105,6 +118,16 @@ function renderJob(job) {
           <p class="job-url">${escapeHtml(job.videoUrl)}</p>
         </div>
         <span class="status-pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+      </div>
+      <div class="progress-panel" aria-label="Job progress">
+        <div class="progress-copy">
+          <strong>${progress.percent}% complete</strong>
+          <span>${escapeHtml(progress.label)}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill ${escapeHtml(job.status)}" style="width: ${progress.percent}%"></div>
+        </div>
+        <p class="latest-log">${escapeHtml(latestLog)}</p>
       </div>
       <div class="job-meta">
         <span>Next run: ${formatDate(job.nextRunAt)}</span>
@@ -117,6 +140,34 @@ function renderJob(job) {
       <ul class="log-list">${logs || "<li>No logs yet.</li>"}</ul>
     </article>
   `;
+}
+
+function getProgress(job) {
+  const logs = (job.logs || []).join(" ").toLowerCase();
+
+  if (job.status === "failed") {
+    return { percent: 100, label: "Needs attention" };
+  }
+
+  if (job.lastUploadId || logs.includes("upload complete")) {
+    return { percent: 100, label: "Uploaded to YouTube" };
+  }
+
+  if (job.status === "running") {
+    if (logs.includes("uploading")) return { percent: 82, label: "Uploading video" };
+    if (logs.includes("preparing") || logs.includes("vertical short") || logs.includes("thumbnail")) {
+      return { percent: 58, label: "Rendering short" };
+    }
+    if (logs.includes("metadata")) return { percent: 32, label: "Generating title, tags, and thumbnail text" };
+    return { percent: 18, label: "Starting automation" };
+  }
+
+  return { percent: 0, label: "Scheduled" };
+}
+
+function setFormMessage(message, type) {
+  formMessage.textContent = message;
+  formMessage.className = `form-message ${type || ""}`.trim();
 }
 
 async function api(url, options = {}) {

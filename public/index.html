@@ -29,6 +29,7 @@
             </p>
           </div>
           <div class="pipeline-card" aria-label="Automation pipeline preview">
+            <!-- UI refresh: clearer pipeline preview for login screen -->
             <div class="pipeline-step active">
               <span>1</span>
               <div>
@@ -79,6 +80,7 @@
             <div>
               <p class="section-label">Automation command center</p>
               <h2>Daily Short Generator</h2>
+              <p class="topbar-copy">Track short generation, upload progress, and daily publishing in one studio view.</p>
             </div>
             <div class="profile">
               <img id="avatar" alt="" />
@@ -87,11 +89,33 @@
             </div>
           </header>
 
+          <!-- UI refresh: frontend-only stats, calculated from existing jobs API data -->
+          <section class="stats-grid" aria-label="Automation summary">
+            <div class="stat-card">
+              <span>Total automations</span>
+              <strong id="totalJobs">0</strong>
+            </div>
+            <div class="stat-card">
+              <span>Working now</span>
+              <strong id="runningJobs">0</strong>
+            </div>
+            <div class="stat-card">
+              <span>Uploaded videos</span>
+              <strong id="uploadedJobs">0</strong>
+            </div>
+          </section>
+
           <section class="creator-panel">
             <form class="job-form" id="jobForm">
-              <label for="videoUrl">YouTube long video URL</label>
+              <div class="form-heading">
+                <div>
+                  <p class="section-label">New automation</p>
+                  <h3>Create a daily short</h3>
+                </div>
+              </div>
+              <label for="videoUrl">YouTube URL or direct video file URL</label>
               <div class="input-row">
-                <input id="videoUrl" name="videoUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." required />
+                <input id="videoUrl" name="videoUrl" type="url" placeholder="https://www.youtube.com/watch?v=... or https://example.com/video.mp4" required />
                 <input id="dailyAt" name="dailyAt" type="time" value="09:00" required />
                 <button class="primary-button" type="submit">Create automation</button>
               </div>
@@ -118,6 +142,7 @@
               <div>
                 <p class="section-label">Queue</p>
                 <h3>Scheduled automations</h3>
+                <p class="section-copy">Progress updates are estimated from the current job status and latest server logs.</p>
               </div>
               <button class="ghost-button" id="refreshButton" type="button">Refresh</button>
             </div>
