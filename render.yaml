@@ -20,7 +20,7 @@ services:
       - key: YTDLP_VERBOSE
         value: false
       - key: YOUTUBE_PRIVACY_STATUS
-        value: private
+        value: public
       - key: OPENROUTER_MODEL
         value: openai/gpt-4o-mini
       - key: SHORT_START
