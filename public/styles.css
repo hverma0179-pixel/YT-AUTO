@@ -1,20 +1,21 @@
 :root {
   color-scheme: light;
-  --bg: #eef3fb;
+  --bg: #dceaff;
   --ink: #0f172a;
   --muted: #667085;
-  --line: #dbe4f0;
+  --line: #c8d7ee;
   --surface: #ffffff;
-  --surface-2: #f8fbff;
-  --blue: #2563eb;
-  --blue-dark: #0f2f76;
-  --blue-deep: #071b45;
-  --blue-soft: #eaf2ff;
+  --surface-2: #f5f9ff;
+  --blue: #1d4ed8;
+  --blue-dark: #123d8f;
+  --blue-deep: #082052;
+  --blue-soft: #e5f0ff;
+  --blue-lift: #f7fbff;
   --green: #12b76a;
   --amber: #f59e0b;
   --red: #ef4444;
-  --shadow: 0 22px 60px rgba(15, 47, 118, 0.12);
-  --shadow-soft: 0 12px 34px rgba(15, 47, 118, 0.08);
+  --shadow: 0 24px 70px rgba(7, 27, 69, 0.18);
+  --shadow-soft: 0 14px 36px rgba(7, 27, 69, 0.1);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -26,8 +27,9 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 30%),
-    linear-gradient(180deg, #ffffff 0%, var(--bg) 55%, #e7eef9 100%);
+    radial-gradient(circle at 18% 0%, rgba(96, 165, 250, 0.35), transparent 30%),
+    radial-gradient(circle at 100% 12%, rgba(14, 165, 233, 0.22), transparent 26%),
+    linear-gradient(180deg, #dbeafe 0%, #c7ddff 44%, #eaf3ff 100%);
   color: var(--ink);
 }
 
@@ -137,7 +139,7 @@ button:disabled {
   gap: 10px;
   min-height: 48px;
   padding: 0 18px;
-  background: linear-gradient(135deg, var(--blue-dark), var(--blue));
+  background: linear-gradient(135deg, #0b2f7a, var(--blue) 58%, #38bdf8);
   color: white;
   text-decoration: none;
   box-shadow: 0 16px 34px rgba(37, 99, 235, 0.24);
@@ -169,9 +171,9 @@ button:disabled {
 .job-form,
 .stat-card,
 .job-card {
-  border: 1px solid rgba(219, 228, 240, 0.9);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(202, 219, 242, 0.92);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(14px);
 }
@@ -230,8 +232,8 @@ button:disabled {
   top: 0;
   height: 100vh;
   padding: 26px;
-  border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.9);
+  border-right: 1px solid rgba(199, 215, 238, 0.86);
+  background: linear-gradient(180deg, rgba(247, 251, 255, 0.96), rgba(229, 240, 255, 0.9));
 }
 
 .brand-row.compact {
@@ -298,6 +300,7 @@ button:disabled {
   min-width: 0;
   margin: 0;
   padding: 28px;
+  background: linear-gradient(180deg, rgba(247, 251, 255, 0.32), rgba(219, 234, 254, 0.18));
 }
 
 .topbar {
@@ -309,9 +312,9 @@ button:disabled {
   justify-content: space-between;
   gap: 18px;
   padding: 18px;
-  border: 1px solid rgba(219, 228, 240, 0.86);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(199, 215, 238, 0.9);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(16px);
 }
@@ -353,7 +356,7 @@ h3 {
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #f8fbff;
+  background: var(--blue-lift);
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -372,12 +375,12 @@ h3 {
   min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--line);
-  background: white;
+  background: #ffffff;
   color: var(--blue-deep);
 }
 
 .soft-button {
-  background: var(--blue-soft);
+  background: linear-gradient(180deg, #ffffff, var(--blue-soft));
   color: var(--blue-dark);
 }
 
@@ -413,12 +416,17 @@ h3 {
   gap: 22px;
   align-items: stretch;
   margin: 22px 0;
+  padding: 18px;
+  border: 1px solid rgba(191, 211, 239, 0.76);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.34);
+  box-shadow: 0 18px 52px rgba(8, 32, 82, 0.08);
 }
 
 .hero-copy {
   padding: 28px;
-  border-radius: 28px;
-  background: linear-gradient(135deg, var(--blue-deep), var(--blue-dark) 58%, var(--blue));
+  border-radius: 22px;
+  background: linear-gradient(135deg, #061a44, var(--blue-dark) 56%, #1d4ed8);
   color: white;
   box-shadow: var(--shadow);
 }
@@ -436,6 +444,9 @@ h3 {
 
 .job-form {
   padding: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 255, 0.96)),
+    var(--surface);
 }
 
 .job-form label {
@@ -479,8 +490,8 @@ h3 {
 input {
   width: 100%;
   min-height: 50px;
-  border: 1px solid #cfd9e8;
-  border-radius: 16px;
+  border: 1px solid #bfd0ea;
+  border-radius: 14px;
   padding: 0 14px;
   background: white;
   color: var(--ink);
@@ -492,7 +503,7 @@ input {
 
 input:focus {
   border-color: var(--blue);
-  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.11);
+  box-shadow: 0 0 0 5px rgba(29, 78, 216, 0.12);
 }
 
 .hero-buttons {
@@ -542,6 +553,7 @@ input:focus {
 
 .stat-card {
   padding: 18px;
+  background: linear-gradient(180deg, #ffffff, #f7fbff);
 }
 
 .stat-card span,
@@ -584,6 +596,7 @@ input:focus {
 
 .panel-card {
   padding: 22px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
 }
 
 .section-heading {
@@ -616,7 +629,7 @@ input:focus {
 
 .job-card:hover {
   transform: translateY(-2px);
-  border-color: #bcd0f4;
+  border-color: #9fbdf0;
   box-shadow: var(--shadow);
 }
 
@@ -679,9 +692,9 @@ input:focus {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid #e5edf8;
-  border-radius: 18px;
-  background: #f8fbff;
+  border: 1px solid #d9e7fb;
+  border-radius: 16px;
+  background: var(--blue-lift);
 }
 
 .progress-copy strong {
@@ -700,7 +713,7 @@ input:focus {
   width: 100%;
   overflow: hidden;
   border-radius: 999px;
-  background: #dfe7f2;
+  background: #d7e5f8;
 }
 
 .progress-track {
@@ -743,8 +756,8 @@ input:focus {
 
 .log-list {
   padding: 12px;
-  border-radius: 16px;
-  background: #f8fbff;
+  border-radius: 14px;
+  background: var(--blue-lift);
 }
 
 .log-list li {
@@ -758,8 +771,8 @@ input:focus {
   gap: 10px;
   align-items: start;
   padding: 12px;
-  border-radius: 16px;
-  background: #f8fbff;
+  border-radius: 14px;
+  background: var(--blue-lift);
 }
 
 .log-row span {
