@@ -24,7 +24,9 @@ const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
 const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 720);
 const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1280);
 const SHORT_PRESET = process.env.SHORT_PRESET || "veryfast";
-const SHORT_CRF = process.env.SHORT_CRF || "28";
+const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "23";
+const FFMPEG_AUDIO_BITRATE = process.env.FFMPEG_AUDIO_BITRATE || "192k";
+const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 1080);
 const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
@@ -320,6 +322,7 @@ function normalizeToken(token) {
 function createJob(res, user, body) {
   const videoUrl = String(body.videoUrl || "").trim();
   const dailyAt = String(body.dailyAt || "09:00").trim();
+  let trim = null;
 
   if (!isSupportedSourceUrl(videoUrl)) {
     return sendJson(res, 400, { error: "Paste a valid YouTube URL or direct video file URL." });
@@ -329,11 +332,18 @@ function createJob(res, user, body) {
     return sendJson(res, 400, { error: "Daily time must use HH:MM format." });
   }
 
+  try {
+    trim = normalizeTrimOptions(body);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message });
+  }
+
   const job = {
     id: crypto.randomUUID(),
     userId: user.id,
     videoUrl,
     dailyAt,
+    trim,
     status: "scheduled",
     stage: "Queued",
     progress: 0,
@@ -343,12 +353,67 @@ function createJob(res, user, body) {
     updatedAt: new Date().toISOString(),
     lastRunAt: null,
     lastUploadId: null,
-    logs: ["Automation created."],
+    logs: [trim ? `Automation created with manual trim ${trim.start}-${trim.end} (${trim.duration}s).` : "Automation created."],
   };
 
   store.jobs.unshift(job);
   saveStore();
   sendJson(res, 201, { job });
+}
+
+function normalizeTrimOptions(body) {
+  const startInput = String(body.trimStart || "").trim();
+  const endInput = String(body.trimEnd || "").trim();
+  const durationInput = String(body.trimDuration || "").trim();
+
+  if (!startInput && !endInput && !durationInput) return null;
+
+  const startSeconds = startInput ? parseTrimTimeToSeconds(startInput, "Start time") : timestampToSeconds(SHORT_START);
+  let endSeconds = null;
+  let duration = null;
+
+  if (endInput) {
+    endSeconds = parseTrimTimeToSeconds(endInput, "End time");
+    duration = endSeconds - startSeconds;
+  } else if (durationInput) {
+    duration = Number(durationInput);
+    if (!Number.isFinite(duration)) throw new Error("Duration must be a number of seconds.");
+    endSeconds = startSeconds + duration;
+  } else {
+    duration = SHORT_DURATION;
+    endSeconds = startSeconds + duration;
+  }
+
+  duration = Math.round(duration * 10) / 10;
+  if (duration <= 0) throw new Error("End time must be after start time.");
+  if (duration > 180) throw new Error("Selected clip is too long. Keep manual trims under 180 seconds.");
+
+  return {
+    mode: "manual",
+    start: secondsToTimestamp(startSeconds),
+    end: secondsToTimestamp(endSeconds),
+    duration,
+  };
+}
+
+function parseTrimTimeToSeconds(value, label) {
+  const text = String(value || "").trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
+
+  const parts = text.split(":").map((part) => part.trim());
+  if (parts.length === 2 && parts.every((part) => /^\d+$/.test(part))) {
+    const [minutes, seconds] = parts.map(Number);
+    if (seconds > 59) throw new Error(`${label} seconds must be 00-59.`);
+    return minutes * 60 + seconds;
+  }
+
+  if (parts.length === 3 && parts.every((part) => /^\d+$/.test(part))) {
+    const [hours, minutes, seconds] = parts.map(Number);
+    if (minutes > 59 || seconds > 59) throw new Error(`${label} must use HH:MM:SS.`);
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  throw new Error(`${label} must be seconds, MM:SS, or HH:MM:SS.`);
 }
 
 function nextDailyRun(dailyAt, from = new Date()) {
@@ -401,7 +466,10 @@ async function runPipeline(job) {
       setJobProgress(job, "Validating cookies", 3, "Validating YouTube cookies before starting job.");
       prepareWritableCookiesFile(job, { required: true });
     }
-    const scenePlan = await analyzeVideoForShort(job, jobDir);
+    const sourceMetadata = await getSourceMetadata(job);
+    const scenePlan = job.trim
+      ? buildManualScenePlan(job, sourceMetadata)
+      : await analyzeVideoForShort(job, jobDir, sourceMetadata);
     const assets = await prepareVideoAssets(job, scenePlan, jobDir);
 
     const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, scenePlan.metadata, job);
@@ -441,10 +509,28 @@ function setJobProgress(job, stage, progress, message) {
   saveStore();
 }
 
-async function analyzeVideoForShort(job, jobDir) {
+function buildManualScenePlan(job, sourceMetadata) {
+  const metadata = fallbackMetadata(job.videoUrl, sourceMetadata);
+  logJob(job, `User selected timeline: ${job.trim.start}-${job.trim.end} (${job.trim.duration}s).`);
+  logJob(job, `Auto title from source: ${metadata.title}`);
+  logJob(job, `Auto description: ${metadata.description}`);
+  logJob(job, "Fallback used: no. Manual timeline selected.");
+  return {
+    start: job.trim.start,
+    end: job.trim.end,
+    duration: job.trim.duration,
+    reason: "User selected trim timing.",
+    fallbackUsed: false,
+    manualTrim: true,
+    sourceMetadata,
+    metadata,
+  };
+}
+
+async function analyzeVideoForShort(job, jobDir, sourceMetadata) {
   setJobProgress(job, "Analyzing transcript", 5, "Checking transcript/captions.");
   const transcript = await extractTranscript(job, jobDir);
-  const fallback = fallbackScenePlan(job.videoUrl, transcript ? "AI scene selection failed." : "Transcript not found.");
+  const fallback = fallbackScenePlan(job.videoUrl, transcript ? "AI scene selection failed." : "Transcript not found.", sourceMetadata);
 
   if (!transcript) {
     logJob(job, "Transcript not found. Fallback used: yes.");
@@ -455,7 +541,7 @@ async function analyzeVideoForShort(job, jobDir) {
 
   if (!process.env.OPENROUTER_API_KEY) {
     logJob(job, "AI scene selection skipped: OPENROUTER_API_KEY is missing. Fallback used: yes.");
-    return fallbackScenePlan(job.videoUrl, "OPENROUTER_API_KEY missing.");
+    return fallbackScenePlan(job.videoUrl, "OPENROUTER_API_KEY missing.", sourceMetadata);
   }
 
   let lastError;
@@ -463,7 +549,7 @@ async function analyzeVideoForShort(job, jobDir) {
     try {
       setJobProgress(job, "Generating metadata", 12, attempt === 1 ? "AI selecting best scene and metadata." : "Retrying AI JSON response.");
       const plan = await requestAiScenePlan(job, transcript.text, attempt);
-      const normalized = normalizeScenePlan(plan, job.videoUrl);
+      const normalized = normalizeScenePlan(plan, job.videoUrl, sourceMetadata);
       logJob(job, `AI selected timestamp: ${normalized.start} for ${normalized.duration}s.`);
       logJob(job, `AI generated title: ${normalized.metadata.title}`);
       logJob(job, `AI generated description: ${normalized.metadata.description}`);
@@ -477,7 +563,7 @@ async function analyzeVideoForShort(job, jobDir) {
   }
 
   logJob(job, `AI failed after retry. Fallback used: yes. Error: ${lastError?.message || "Unknown AI error"}`);
-  return fallbackScenePlan(job.videoUrl, lastError?.message || "AI failed.");
+  return fallbackScenePlan(job.videoUrl, lastError?.message || "AI failed.", sourceMetadata);
 }
 
 async function requestAiScenePlan(job, transcriptText, attempt) {
@@ -540,7 +626,7 @@ function parseJsonFromText(text) {
   }
 }
 
-function normalizeScenePlan(plan, videoUrl) {
+function normalizeScenePlan(plan, videoUrl, sourceMetadata) {
   const start = normalizeTimestamp(plan.start);
   const duration = Number(plan.duration);
   if (!start) throw new Error(`AI returned invalid start timestamp: ${plan.start}`);
@@ -548,11 +634,11 @@ function normalizeScenePlan(plan, videoUrl) {
     throw new Error(`AI returned invalid duration: ${plan.duration}`);
   }
 
-  const fallback = fallbackMetadata(videoUrl);
-  const title = clampText(plan.title || fallback.title, 90);
+  const fallback = fallbackMetadata(videoUrl, sourceMetadata);
+  const title = buildCreditTitle(sourceMetadata, plan.title || fallback.title);
   if (!title) throw new Error("AI returned empty title.");
 
-  const description = clampText(plan.description || fallback.description, 4500);
+  const description = buildUniqueDescription(plan.description || fallback.description, videoUrl, sourceMetadata);
   const tags = Array.isArray(plan.tags) && plan.tags.length
     ? plan.tags.map((tag) => clampText(tag, 40)).filter(Boolean).slice(0, 15)
     : fallback.tags;
@@ -589,8 +675,15 @@ function secondsToTimestamp(totalSeconds) {
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
-function fallbackScenePlan(videoUrl, reason) {
-  const metadata = fallbackMetadata(videoUrl);
+function timestampToSeconds(timestamp) {
+  const normalized = normalizeTimestamp(timestamp);
+  if (!normalized) return 0;
+  const [hours, minutes, seconds] = normalized.split(":").map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function fallbackScenePlan(videoUrl, reason, sourceMetadata) {
+  const metadata = fallbackMetadata(videoUrl, sourceMetadata);
   return {
     start: SHORT_START,
     duration: SHORT_DURATION,
@@ -600,19 +693,69 @@ function fallbackScenePlan(videoUrl, reason) {
   };
 }
 
-function fallbackMetadata(videoUrl) {
+function fallbackMetadata(videoUrl, sourceMetadata) {
   const seed = crypto.randomBytes(3).toString("hex").toUpperCase();
+  const sourceTitle = sourceMetadata?.title || "Selected video";
+  const channel = sourceMetadata?.channel || sourceMetadata?.uploader || "Original channel";
   return {
-    title: clampText(`Must-watch short moment ${seed}`, 90),
-    description: `Auto-generated short clip from ${videoUrl}.\n\nFresh highlight ID: ${seed}. Posted by the channel owner or with permission.`,
+    title: buildCreditTitle(sourceMetadata, `Must-watch short moment ${seed}`),
+    description: buildUniqueDescription(`Short clip from "${sourceTitle}".`, videoUrl, { ...sourceMetadata, channel }),
     tags: ["shorts", "viral", "trending", "highlights", "youtube shorts", "creator", "clip", "video"],
     thumbnailText: "Watch This",
   };
 }
 
+function buildCreditTitle(sourceMetadata, fallbackTitle) {
+  const originalTitle = clampText(sourceMetadata?.title || fallbackTitle || "Selected video", 52);
+  const channel = clampText(sourceMetadata?.channel || sourceMetadata?.uploader || "Original Channel", 24);
+  return clampText(`${originalTitle} own by ${channel} le edits`, 90);
+}
+
+function buildUniqueDescription(baseDescription, videoUrl, sourceMetadata) {
+  const seed = crypto.randomBytes(3).toString("hex").toUpperCase();
+  const sourceTitle = sourceMetadata?.title || "the original video";
+  const channel = sourceMetadata?.channel || sourceMetadata?.uploader || "the original channel";
+  const cleaned = clampText(baseDescription || "Auto-generated YouTube Shorts clip.", 900);
+  return [
+    cleaned,
+    "",
+    `Original video credit: "${sourceTitle}" by ${channel}.`,
+    `Source: ${videoUrl}`,
+    `Unique clip ID: ${seed}.`,
+  ].join("\n");
+}
+
 function clampText(value, max) {
   const text = String(value).replace(/\s+/g, " ").trim();
   return text.length > max ? text.slice(0, max - 1).trim() : text;
+}
+
+async function getSourceMetadata(job) {
+  if (!isYouTubeUrl(job.videoUrl)) {
+    return { title: "Direct video clip", channel: "Original Channel" };
+  }
+
+  try {
+    await requireTool("yt-dlp");
+    setJobProgress(job, "Reading source metadata", 6, "Reading original video title and channel.");
+    const output = await runTool("yt-dlp", buildYtDlpMetadataArgs(job.videoUrl, job), { timeoutMs: 90 * 1000, maxOutput: 150000 });
+    const parsed = parseJsonFromText(output);
+    if (!Object.keys(parsed).length) throw new Error(`yt-dlp metadata JSON was empty or invalid: ${output.slice(-500)}`);
+    const metadata = {
+      title: clampText(parsed.title || "Selected video", 120),
+      channel: clampText(parsed.channel || parsed.uploader || "Original Channel", 80),
+      uploader: clampText(parsed.uploader || parsed.channel || "Original Channel", 80),
+    };
+    logJob(job, `Original video title: ${metadata.title}`);
+    logJob(job, `Original channel: ${metadata.channel}`);
+    return metadata;
+  } catch (error) {
+    logYtDlpCookieError(job, error);
+    const friendly = friendlyYtDlpError(error);
+    if (/Cookies expired\/invalid|Invalid or expired cookies/i.test(friendly)) throw new Error(friendly);
+    logJob(job, `Source metadata fallback used: ${friendly}`);
+    return { title: "Selected video", channel: "Original Channel" };
+  }
 }
 
 async function extractTranscript(job, jobDir) {
@@ -678,6 +821,37 @@ function buildYtDlpTranscriptArgs(videoUrl, transcriptBase, job) {
   if (cookiesPath) args.push("--cookies", cookiesPath);
 
   args.push("-o", transcriptBase, videoUrl);
+  return args;
+}
+
+function buildYtDlpMetadataArgs(videoUrl, job) {
+  const args = [];
+  const cookiesPath = prepareWritableCookiesFile(job, { required: true });
+
+  if (YTDLP_VERBOSE) args.push("-vU");
+
+  args.push(
+    "--dump-single-json",
+    "--skip-download",
+    "--no-playlist",
+    "--force-ipv4",
+    "--sleep-requests",
+    "8",
+    "--sleep-interval",
+    "8",
+    "--max-sleep-interval",
+    "20",
+    "--retries",
+    "10",
+    "--fragment-retries",
+    "10",
+    "--js-runtimes",
+    YTDLP_JS_RUNTIME,
+    "--extractor-args",
+    "youtube:player_client=android,web",
+  );
+
+  args.push("--cookies", cookiesPath, videoUrl);
   return args;
 }
 
@@ -766,12 +940,20 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
   const videoPath = path.join(jobDir, `short-${Date.now()}.mp4`);
   const thumbnailPath = path.join(jobDir, `thumbnail-${Date.now()}.jpg`);
   const sourceInput = isDirectVideoUrl(job.videoUrl) ? job.videoUrl : rawPath;
+  const youtubeManualSection = isYouTubeUrl(job.videoUrl) && scenePlan.manualTrim;
 
   try {
     if (isYouTubeUrl(job.videoUrl)) {
       await requireTool("yt-dlp");
-      setJobProgress(job, "Downloading video", 10, "Downloading video source at Shorts-friendly quality.");
-      await runYtDlp(job.videoUrl, rawPath, job);
+      setJobProgress(
+        job,
+        youtubeManualSection ? "Downloading selected clip" : "Downloading video",
+        10,
+        youtubeManualSection
+          ? `Downloading selected clip ${scenePlan.start}-${scenePlan.end} only.`
+          : "Downloading video source at Shorts-friendly quality.",
+      );
+      await runYtDlp(job.videoUrl, rawPath, job, youtubeManualSection ? scenePlan : null);
     }
 
     const duration = await getVideoDuration(sourceInput);
@@ -779,25 +961,33 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       logJob(job, `Warning: source video is ${Math.round(duration / 60)} minutes long, over the 2 hour guard.`);
     }
 
-    setJobProgress(job, "Cutting short clip", 38, `Cutting ${scenePlan.duration}s clip from ${scenePlan.start}.`);
-    await runTool("ffmpeg", [
-      "-y",
-      "-ss",
-      scenePlan.start,
-      "-i",
-      sourceInput,
-      "-t",
-      String(scenePlan.duration),
-      "-c",
-      "copy",
-      clipPath,
-    ], { timeoutMs: RENDER_TIMEOUT_MS });
+    let renderInput = sourceInput;
+    if (youtubeManualSection) {
+      renderInput = rawPath;
+      setJobProgress(job, "Cutting short clip", 38, "Selected YouTube clip already downloaded. Skipping full-video trim.");
+    } else {
+      setJobProgress(job, "Cutting short clip", 38, `Cutting ${scenePlan.duration}s clip from ${scenePlan.start}.`);
+      await runTool("ffmpeg", [
+        "-y",
+        "-ss",
+        scenePlan.start,
+        "-i",
+        sourceInput,
+        "-t",
+        String(scenePlan.duration),
+        "-c",
+        "copy",
+        clipPath,
+      ], { timeoutMs: RENDER_TIMEOUT_MS });
+      renderInput = clipPath;
+    }
 
-    setJobProgress(job, "Rendering vertical short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} vertical short with Vivid Warm filter.`);
+    setJobProgress(job, "Rendering HD short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} HD short.`);
+    logJob(job, "Applying Vivid Warm filter.");
     await runTool("ffmpeg", [
       "-y",
       "-i",
-      clipPath,
+      renderInput,
       "-vf",
       vividWarmVideoFilter(),
       "-c:v",
@@ -805,11 +995,13 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       "-preset",
       SHORT_PRESET,
       "-crf",
-      SHORT_CRF,
+      FFMPEG_CRF,
       "-c:a",
       "aac",
       "-b:a",
-      "128k",
+      FFMPEG_AUDIO_BITRATE,
+      "-pix_fmt",
+      "yuv420p",
       "-shortest",
       "-movflags",
       "+faststart",
@@ -826,7 +1018,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 }
 
 function vividWarmVideoFilter() {
-  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},eq=saturation=1.25:contrast=1.08:brightness=0.03,colorbalance=rs=.08:gs=.03:bs=-.04`;
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},eq=saturation=1.20:contrast=1.08:brightness=0.02,colorbalance=rs=.06:gs=.03:bs=-.03`;
 }
 
 async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
@@ -891,15 +1083,15 @@ function isDirectVideoUrl(value) {
   return /^https:\/\/.+\.(mp4|mov|m4v|webm)(\?.*)?$/i.test(value);
 }
 
-function runYtDlp(videoUrl, outputPath, job) {
-  const args = buildYtDlpArgs(videoUrl, outputPath, job);
+function runYtDlp(videoUrl, outputPath, job, sectionPlan = null) {
+  const args = buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan);
   return runTool("yt-dlp", args).catch((error) => {
     logYtDlpCookieError(job, error);
     throw new Error(friendlyYtDlpError(error));
   });
 }
 
-function buildYtDlpArgs(videoUrl, outputPath, job) {
+function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
   const args = [];
   const cookiesPath = prepareWritableCookiesFile(job, { required: true });
 
@@ -928,9 +1120,15 @@ function buildYtDlpArgs(videoUrl, outputPath, job) {
 
   args.push("--cookies", cookiesPath);
 
+  if (sectionPlan) {
+    const section = formatDownloadSection(sectionPlan);
+    logJob(job, `yt-dlp download section: ${section}`);
+    args.push("--download-sections", section, "--force-keyframes-at-cuts");
+  }
+
   args.push(
     "-f",
-    "bv*[height<=720]+ba/b[height<=720]/best[height<=720]",
+    `bv*[height<=${YTDLP_MAX_HEIGHT}]+ba/b[height<=${YTDLP_MAX_HEIGHT}]/best[height<=${YTDLP_MAX_HEIGHT}]`,
     "--merge-output-format",
     "mp4",
     "--no-write-subs",
@@ -941,6 +1139,14 @@ function buildYtDlpArgs(videoUrl, outputPath, job) {
     videoUrl,
   );
   return args;
+}
+
+function formatDownloadSection(sectionPlan) {
+  const start = normalizeTimestamp(sectionPlan.start) || SHORT_START;
+  const end = sectionPlan.end
+    ? normalizeTimestamp(sectionPlan.end)
+    : secondsToTimestamp(timestampToSeconds(start) + Number(sectionPlan.duration || SHORT_DURATION));
+  return `*${start}-${end}`;
 }
 
 function prepareWritableCookiesFile(job, options = {}) {
@@ -954,14 +1160,14 @@ function prepareWritableCookiesFile(job, options = {}) {
 
   if (!originalExists) {
     logCookieStatus(job, "cookies validation failed: source file not found.");
-    if (options.required) throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
+    if (options.required) throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
     return null;
   }
 
   const originalValidation = validateCookiesFile(originalCookiesPath);
   if (!originalValidation.ok) {
     logCookieStatus(job, `cookies validation failed: ${originalValidation.reason}`);
-    throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
+    throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
   }
   logCookieStatus(job, `cookies validation passed: ${originalValidation.foundNames.join(", ")}`);
 
@@ -971,7 +1177,7 @@ function prepareWritableCookiesFile(job, options = {}) {
   const tempValidation = tempExists ? validateCookiesFile(tempCookiesPath) : { ok: false, reason: "temp file not created" };
   if (!tempValidation.ok) {
     logCookieStatus(job, `cookies temp validation failed: ${tempValidation.reason}`);
-    throw new Error("Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.");
+    throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
   }
   logCookieStatus(job, `cookies temp validation passed: ${tempValidation.foundNames.join(", ")}`);
   return tempExists ? tempCookiesPath : null;
@@ -1027,11 +1233,11 @@ function friendlyPipelineError(error) {
 
 function friendlyYtDlpError(error) {
   const text = String(error?.message || error || "");
-  if (/Invalid or expired cookies/i.test(text)) {
-    return "Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.";
+  if (/Invalid or expired cookies|Cookies expired\/invalid/i.test(text)) {
+    return "Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.";
   }
   if (isYtDlpCookieError(text)) {
-    return "YouTube cookies expired or invalid. Export fresh cookies.txt and update Render Secret File.";
+    return "Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.";
   }
   return text;
 }

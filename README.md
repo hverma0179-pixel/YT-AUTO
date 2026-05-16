@@ -70,11 +70,11 @@ This is a local starter scaffold. Before using it for real users, replace the fi
 
 The app is optimized to avoid rendering an entire long source video. It now:
 
-1. Downloads a 720p-or-lower source format for YouTube URLs.
-2. Checks YouTube transcript/captions when available.
+1. If the user enters start/end or start/duration, downloads only that selected YouTube section with `yt-dlp --download-sections`.
+2. If no timing is entered, checks YouTube transcript/captions when available.
 3. Asks AI to pick the strongest 30-45 second moment and create unique metadata.
 4. Falls back to `SHORT_START` and `SHORT_DURATION` when transcript or AI fails.
-5. Cuts the selected short clip first.
+5. Cuts only the selected short clip.
 6. Renders only that clip to vertical Shorts format with a Vivid Warm filter.
 7. Uploads the final short with YouTube resumable upload chunks.
 
@@ -86,7 +86,9 @@ SHORT_DURATION=45
 SHORT_WIDTH=720
 SHORT_HEIGHT=1280
 SHORT_PRESET=veryfast
-SHORT_CRF=28
+FFMPEG_CRF=23
+FFMPEG_AUDIO_BITRATE=192k
+YTDLP_MAX_HEIGHT=1080
 TRANSCRIPT_LANGS=en.*,en
 RENDER_TIMEOUT_MS=600000
 UPLOAD_CHUNK_SIZE=8388608
@@ -94,13 +96,19 @@ UPLOAD_TIMEOUT_MS=600000
 MAX_SOURCE_DURATION_SECONDS=7200
 ```
 
-The default ffmpeg render target is 720x1280 with `libx264`, `veryfast`, `crf 28`, AAC audio at 128k, `+faststart`, and this Vivid Warm filter:
+The default ffmpeg render target is 720x1280 with `libx264`, `veryfast`, `crf 23`, AAC audio at 192k, `+faststart`, and this Vivid Warm filter:
 
 ```text
-scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,eq=saturation=1.25:contrast=1.08:brightness=0.03,colorbalance=rs=.08:gs=.03:bs=-.04
+scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,eq=saturation=1.20:contrast=1.08:brightness=0.02,colorbalance=rs=.06:gs=.03:bs=-.03
 ```
 
-The job logs now show whether transcript was found, the AI-selected timestamp, generated title, generated description, and whether fallback was used.
+The job logs now show whether a manual timeline was used, transcript status, the AI-selected timestamp, generated title, generated description, selected-section download, Vivid Warm filtering, and whether fallback was used.
+
+Auto titles use the original yt-dlp metadata:
+
+```text
+{original video title} own by {channel name} le edits
+```
 
 ## Source Video Reliability
 
@@ -186,13 +194,13 @@ login cookies such as SID, HSID, SAPISID, LOGIN_INFO, or secure PSID are present
 If validation fails, the job fails clearly with:
 
 ```text
-Invalid or expired cookies. Export fresh cookies.txt from logged-in YouTube browser.
+Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.
 ```
 
 If YouTube rejects cookies during `yt-dlp`, the job fails clearly with:
 
 ```text
-YouTube cookies expired or invalid. Export fresh cookies.txt and update Render Secret File.
+Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.
 ```
 
 Job logs include the cookies source path, temp path, validation result, and exact cookie-related `yt-dlp` failure when available.

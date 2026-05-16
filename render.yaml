@@ -33,8 +33,12 @@ services:
         value: 1280
       - key: SHORT_PRESET
         value: veryfast
-      - key: SHORT_CRF
-        value: 28
+      - key: FFMPEG_CRF
+        value: 23
+      - key: FFMPEG_AUDIO_BITRATE
+        value: 192k
+      - key: YTDLP_MAX_HEIGHT
+        value: 1080
       - key: TRANSCRIPT_LANGS
         value: en.*,en
       - key: RENDER_TIMEOUT_MS
