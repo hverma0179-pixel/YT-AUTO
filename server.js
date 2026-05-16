@@ -14,7 +14,8 @@ const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_BASE_URL}/auth/callback`;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const WORK_DIR = process.env.WORK_DIR || path.join(os.tmpdir(), "autoshorts-work");
-const SESSION_MAX_AGE_SECONDS = Number(process.env.SESSION_MAX_AGE_SECONDS || 30 * 24 * 60 * 60);
+const SESSION_MAX_AGE_SECONDS = Number(process.env.SESSION_MAX_AGE_SECONDS || 90 * 24 * 60 * 60);
+const SESSION_TOUCH_INTERVAL_MS = Number(process.env.SESSION_TOUCH_INTERVAL_MS || 12 * 60 * 60 * 1000);
 const SESSION_COOKIE_SECURE = APP_BASE_URL.startsWith("https://");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -80,6 +81,7 @@ const server = http.createServer(async (req, res) => {
       if (!session && url.pathname !== "/api/health") {
         return sendJson(res, 401, { error: "Sign in with Google first." });
       }
+      if (session) refreshSessionIfNeeded(res, session);
 
       if (req.method === "GET" && url.pathname === "/api/health") {
         return sendJson(res, 200, { ok: true, tools: TOOL_COMMANDS });
@@ -229,7 +231,18 @@ function getSession(req) {
     saveStore();
     return null;
   }
+  session.sid = sid;
   return session;
+}
+
+function refreshSessionIfNeeded(res, session) {
+  const lastTouched = session.touchedAt ? new Date(session.touchedAt).getTime() : 0;
+  if (Number.isFinite(lastTouched) && Date.now() - lastTouched < SESSION_TOUCH_INTERVAL_MS) return;
+
+  session.touchedAt = new Date().toISOString();
+  session.expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
+  saveStore();
+  setCookie(res, "sid", session.sid, { maxAge: SESSION_MAX_AGE_SECONDS, secure: SESSION_COOKIE_SECURE });
 }
 
 function requireConfig(keys) {
@@ -296,7 +309,7 @@ async function finishGoogleAuth(req, res, url) {
   const sid = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
   store.users[user.id] = user;
-  store.sessions[sid] = { user, createdAt: new Date().toISOString(), expiresAt };
+  store.sessions[sid] = { user, createdAt: new Date().toISOString(), touchedAt: new Date().toISOString(), expiresAt };
   store.tokens[user.id] = normalizeToken(token);
   saveStore();
 
@@ -805,6 +818,7 @@ function buildYtDlpTranscriptArgs(videoUrl, transcriptBase, job) {
     "vtt",
     "--no-playlist",
     "--force-ipv4",
+    "--no-cache-dir",
     "--sleep-requests",
     "8",
     "--sleep-interval",
@@ -838,6 +852,7 @@ function buildYtDlpMetadataArgs(videoUrl, job) {
     "--skip-download",
     "--no-playlist",
     "--force-ipv4",
+    "--no-cache-dir",
     "--sleep-requests",
     "8",
     "--sleep-interval",
@@ -1144,6 +1159,7 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
   args.push(
     "--no-playlist",
     "--force-ipv4",
+    "--no-cache-dir",
     "--sleep-requests",
     "8",
     "--sleep-interval",
@@ -1193,7 +1209,7 @@ function formatDownloadSection(sectionPlan) {
 
 function prepareWritableCookiesFile(job, options = {}) {
   const originalCookiesPath = resolveCookiesPath(YTDLP_COOKIES_PATH);
-  const tempCookiesPath = path.join(os.tmpdir(), "cookies.txt");
+  const tempCookiesPath = getTempCookiesPath(job);
   const originalExists = Boolean(YTDLP_COOKIES_PATH && fs.existsSync(originalCookiesPath));
 
   logCookieStatus(job, `cookies source path: ${originalCookiesPath}`);
@@ -1213,7 +1229,9 @@ function prepareWritableCookiesFile(job, options = {}) {
   }
   logCookieStatus(job, `cookies validation passed: ${originalValidation.foundNames.join(", ")}`);
 
+  fs.mkdirSync(path.dirname(tempCookiesPath), { recursive: true });
   fs.copyFileSync(originalCookiesPath, tempCookiesPath);
+  logCookieStatus(job, "fresh cookies copy prepared for this yt-dlp run.");
   const tempExists = fs.existsSync(tempCookiesPath);
   logCookieStatus(job, `cookies temp exists: ${tempExists}`);
   const tempValidation = tempExists ? validateCookiesFile(tempCookiesPath) : { ok: false, reason: "temp file not created" };
@@ -1223,6 +1241,13 @@ function prepareWritableCookiesFile(job, options = {}) {
   }
   logCookieStatus(job, `cookies temp validation passed: ${tempValidation.foundNames.join(", ")}`);
   return tempExists ? tempCookiesPath : null;
+}
+
+function getTempCookiesPath(job) {
+  if (job?.id) {
+    return path.join(WORK_DIR, job.id, "cookies.txt");
+  }
+  return path.join(os.tmpdir(), "autoshorts-cookies.txt");
 }
 
 function resolveCookiesPath(value) {

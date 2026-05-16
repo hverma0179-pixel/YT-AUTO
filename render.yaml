@@ -9,6 +9,10 @@ services:
         value: 10000
       - key: HOST
         value: 0.0.0.0
+      - key: SESSION_MAX_AGE_SECONDS
+        value: 7776000
+      - key: SESSION_TOUCH_INTERVAL_MS
+        value: 43200000
       - key: FFMPEG_PATH
         value: ffmpeg
       - key: YTDLP_PATH

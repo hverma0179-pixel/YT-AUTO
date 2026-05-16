@@ -22,7 +22,8 @@ Important: only process videos you own or have clear rights to reuse. YouTube an
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_REDIRECT_URI`
    - `OPENROUTER_API_KEY`
-   - `SESSION_MAX_AGE_SECONDS` controls how long Google login stays active. Default is 30 days.
+   - `SESSION_MAX_AGE_SECONDS` controls how long Google login stays active. Default is 90 days.
+   - `SESSION_TOUCH_INTERVAL_MS` controls how often active sessions refresh. Default is 12 hours.
 3. Install command-line tools used by the video pipeline:
    - `yt-dlp`
    - `ffmpeg`
@@ -183,13 +184,13 @@ YTDLP_VERBOSE=false
 
 Redeploy after updating the secret file so the service reads the latest cookies.
 
-The app never passes `/etc/secrets/cookies.txt` directly to `yt-dlp`. It validates the secret file first, then copies it to:
+The app never passes `/etc/secrets/cookies.txt` directly to `yt-dlp`. It validates the secret file first, then copies a fresh writable copy for each job/run to:
 
 ```text
-/tmp/cookies.txt
+/tmp/autoshorts-work/<job-id>/cookies.txt
 ```
 
-Only `/tmp/cookies.txt` is passed to `yt-dlp`, which avoids Render's read-only secret-file mount error while keeping the original secret file unchanged.
+Only the per-job temp cookie file is passed to `yt-dlp`, which avoids Render's read-only secret-file mount error, avoids shared `/tmp/cookies.txt` corruption between jobs, and keeps the original secret file unchanged.
 
 Cookie validation checks:
 
