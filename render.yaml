@@ -28,15 +28,19 @@ services:
       - key: SHORT_DURATION
         value: 45
       - key: SHORT_WIDTH
-        value: 720
+        value: 1080
       - key: SHORT_HEIGHT
-        value: 1280
+        value: 1920
       - key: YTDLP_FORMAT
         value: bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
       - key: FFMPEG_PRESET
         value: veryfast
       - key: FFMPEG_CRF
-        value: 23
+        value: 20
+      - key: FFMPEG_MAXRATE
+        value: 10M
+      - key: FFMPEG_BUFSIZE
+        value: 20M
       - key: AUDIO_BITRATE
         value: 192k
       - key: YTDLP_MAX_HEIGHT

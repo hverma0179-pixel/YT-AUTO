@@ -21,10 +21,12 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_BODY_BYTES = 1024 * 1024;
 const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
-const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 720);
-const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1280);
+const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 1080);
+const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1920);
 const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "veryfast";
-const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "23";
+const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "20";
+const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "10M";
+const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "20M";
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
 const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 1080);
 const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height<=${YTDLP_MAX_HEIGHT}]+ba/b[height<=${YTDLP_MAX_HEIGHT}]/best[height<=${YTDLP_MAX_HEIGHT}]`;
@@ -990,7 +992,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 
     setJobProgress(job, "Rendering HD short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} HD short.`);
     logJob(job, "Applying Vivid Warm filter.");
-    logJob(job, `ffmpeg CRF used: ${FFMPEG_CRF}. Preset: ${FFMPEG_PRESET}. Audio: ${AUDIO_BITRATE}.`);
+    logJob(job, `ffmpeg CRF used: ${FFMPEG_CRF}. Preset: ${FFMPEG_PRESET}. Maxrate: ${FFMPEG_MAXRATE}. Audio: ${AUDIO_BITRATE}.`);
     await runTool("ffmpeg", [
       "-y",
       "-i",
@@ -1003,6 +1005,10 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       FFMPEG_PRESET,
       "-crf",
       FFMPEG_CRF,
+      "-maxrate",
+      FFMPEG_MAXRATE,
+      "-bufsize",
+      FFMPEG_BUFSIZE,
       "-c:a",
       "aac",
       "-b:a",
@@ -1033,7 +1039,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 }
 
 function vividWarmVideoFilter() {
-  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},unsharp=5:5:0.8:3:3:0.4,eq=saturation=1.18:contrast=1.08:brightness=0.02`;
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:flags=lanczos:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},unsharp=5:5:0.9:3:3:0.5,eq=saturation=1.18:contrast=1.08:brightness=0.02`;
 }
 
 async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
