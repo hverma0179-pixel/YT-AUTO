@@ -27,6 +27,15 @@ const serverStatusValue = document.querySelector("#serverStatusValue");
 const youtubeStatusValue = document.querySelector("#youtubeStatusValue");
 const aiStatusValue = document.querySelector("#aiStatusValue");
 const uploadStatusValue = document.querySelector("#uploadStatusValue");
+const successRateValue = document.querySelector("#successRateValue");
+const successRateFill = document.querySelector("#successRateFill");
+const avgProgressValue = document.querySelector("#avgProgressValue");
+const avgProgressFill = document.querySelector("#avgProgressFill");
+const activeStageValue = document.querySelector("#activeStageValue");
+const activeStageDetail = document.querySelector("#activeStageDetail");
+const analyticsBars = document.querySelector("#analyticsBars");
+const latestResultTitle = document.querySelector("#latestResultTitle");
+const latestResultMeta = document.querySelector("#latestResultMeta");
 
 let jobsPoll = null;
 let progressTicker = null;
@@ -169,6 +178,7 @@ function renderDashboard() {
   renderUploads(jobs);
   renderLogs(jobs);
   updateSystemCards(latestJobs);
+  renderAnalytics(latestJobs);
 }
 
 function getFilteredJobs() {
@@ -355,6 +365,61 @@ function updateVisibleProgress() {
     if (text) text.textContent = `${formatPercent(progress.percent)} complete`;
     if (fill) fill.style.width = `${progress.percent}%`;
   }
+  renderAnalytics(latestJobs);
+}
+
+function renderAnalytics(jobs) {
+  if (!successRateValue || !analyticsBars) return;
+
+  const total = jobs.length;
+  const uploaded = jobs.filter((job) => job.lastUploadId).length;
+  const failed = jobs.filter((job) => job.status === "failed").length;
+  const running = jobs.filter((job) => job.status === "running").length;
+  const scheduled = Math.max(0, total - uploaded - failed - running);
+  const rateBase = uploaded + failed;
+  const successRate = rateBase ? Math.round((uploaded / rateBase) * 100) : 0;
+  const averageProgress = total
+    ? Math.round(jobs.reduce((sum, job) => sum + getDisplayProgress(job).percent, 0) / total)
+    : 0;
+  const activeJob = jobs.find((job) => job.status === "running");
+  const latestUpload = jobs.find((job) => job.lastUploadId);
+
+  successRateValue.textContent = `${successRate}%`;
+  successRateFill.style.width = `${successRate}%`;
+  avgProgressValue.textContent = `${averageProgress}%`;
+  avgProgressFill.style.width = `${averageProgress}%`;
+  activeStageValue.textContent = activeJob ? getStage(activeJob).label : "Idle";
+  activeStageDetail.textContent = activeJob ? formatTrim(activeJob) || "Automation is processing" : "No job running";
+
+  const rows = [
+    ["Published", uploaded, "published"],
+    ["Processing", running, "processing"],
+    ["Scheduled", scheduled, "scheduled"],
+    ["Failed", failed, "failed"],
+  ];
+
+  analyticsBars.innerHTML = rows
+    .map(([label, value, status]) => {
+      const percent = total ? Math.round((value / total) * 100) : 0;
+      return `
+        <div class="analytics-bar-row">
+          <div>
+            <strong>${label}</strong>
+            <span>${value} jobs</span>
+          </div>
+          <div class="analytics-bar-track">
+            <span class="${status}" style="width: ${percent}%"></span>
+          </div>
+          <em>${percent}%</em>
+        </div>
+      `;
+    })
+    .join("");
+
+  latestResultTitle.textContent = latestUpload?.lastMetadata?.title || (latestUpload ? "Uploaded short" : "No uploads yet");
+  latestResultMeta.textContent = latestUpload
+    ? `Last upload: ${formatDate(latestUpload.lastRunAt)}`
+    : "Create or run an automation to see live upload analytics.";
 }
 
 function getStage(job) {

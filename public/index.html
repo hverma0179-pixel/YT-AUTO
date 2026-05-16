@@ -168,6 +168,48 @@
             </div>
           </section>
 
+          <section class="analytics-board" aria-label="Real-time analytics">
+            <div class="panel-card analytics-feature">
+              <div class="section-heading">
+                <div>
+                  <p class="section-label">Live analytics</p>
+                  <h3>Realtime creator pulse</h3>
+                  <p class="section-copy">Updates every few seconds from your active automation queue.</p>
+                </div>
+                <span class="live-badge"><span class="status-dot"></span> Live</span>
+              </div>
+              <div class="analytics-grid">
+                <div class="analytics-metric">
+                  <span>Success rate</span>
+                  <strong id="successRateValue">0%</strong>
+                  <div class="metric-track"><span id="successRateFill"></span></div>
+                </div>
+                <div class="analytics-metric">
+                  <span>Avg progress</span>
+                  <strong id="avgProgressValue">0%</strong>
+                  <div class="metric-track"><span id="avgProgressFill"></span></div>
+                </div>
+                <div class="analytics-metric">
+                  <span>Active stage</span>
+                  <strong id="activeStageValue">Idle</strong>
+                  <small id="activeStageDetail">No job running</small>
+                </div>
+              </div>
+              <div class="analytics-bars" id="analyticsBars"></div>
+            </div>
+
+            <div class="panel-card analytics-side">
+              <p class="section-label">Latest result</p>
+              <h3 id="latestResultTitle">No uploads yet</h3>
+              <p id="latestResultMeta">Create or run an automation to see live upload analytics.</p>
+              <div class="quality-strip">
+                <span>1080p render</span>
+                <span>CRF 18</span>
+                <span>Selected clip</span>
+              </div>
+            </div>
+          </section>
+
           <section class="content-grid">
             <div class="main-column">
               <section class="panel-card jobs-section" id="automationSection">
