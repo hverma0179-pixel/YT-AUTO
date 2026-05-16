@@ -85,9 +85,10 @@ SHORT_START=00:01:00
 SHORT_DURATION=45
 SHORT_WIDTH=720
 SHORT_HEIGHT=1280
-SHORT_PRESET=veryfast
+YTDLP_FORMAT=bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
+FFMPEG_PRESET=veryfast
 FFMPEG_CRF=23
-FFMPEG_AUDIO_BITRATE=192k
+AUDIO_BITRATE=192k
 YTDLP_MAX_HEIGHT=1080
 TRANSCRIPT_LANGS=en.*,en
 RENDER_TIMEOUT_MS=600000
@@ -96,13 +97,19 @@ UPLOAD_TIMEOUT_MS=600000
 MAX_SOURCE_DURATION_SECONDS=7200
 ```
 
-The default ffmpeg render target is 720x1280 with `libx264`, `veryfast`, `crf 23`, AAC audio at 192k, `+faststart`, and this Vivid Warm filter:
+The default yt-dlp source format avoids low-quality 360p/480p video and prefers up to 1080p before the final Shorts render:
 
 ```text
-scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,eq=saturation=1.20:contrast=1.08:brightness=0.02,colorbalance=rs=.06:gs=.03:bs=-.03
+bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
 ```
 
-The job logs now show whether a manual timeline was used, transcript status, the AI-selected timestamp, generated title, generated description, selected-section download, Vivid Warm filtering, and whether fallback was used.
+The default ffmpeg render target is 720x1280 with `libx264`, `veryfast`, `crf 23`, `yuv420p`, AAC audio at 192k, `+faststart`, and this sharpened Vivid Warm filter:
+
+```text
+scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,unsharp=5:5:0.8:3:3:0.4,eq=saturation=1.18:contrast=1.08:brightness=0.02
+```
+
+The job logs now show whether a manual timeline was used, transcript status, the AI-selected timestamp, generated title, generated description, selected yt-dlp format, source resolution, selected-section download, Vivid Warm filtering, ffmpeg CRF, final output resolution, final file size, and whether fallback was used.
 
 Auto titles use the original yt-dlp metadata:
 

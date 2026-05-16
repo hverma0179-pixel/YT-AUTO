@@ -23,10 +23,11 @@ const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
 const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 720);
 const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1280);
-const SHORT_PRESET = process.env.SHORT_PRESET || "veryfast";
+const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "veryfast";
 const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "23";
-const FFMPEG_AUDIO_BITRATE = process.env.FFMPEG_AUDIO_BITRATE || "192k";
+const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
 const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 1080);
+const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height<=${YTDLP_MAX_HEIGHT}]+ba/b[height<=${YTDLP_MAX_HEIGHT}]/best[height<=${YTDLP_MAX_HEIGHT}]`;
 const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
@@ -956,9 +957,14 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       await runYtDlp(job.videoUrl, rawPath, job, youtubeManualSection ? scenePlan : null);
     }
 
-    const duration = await getVideoDuration(sourceInput);
-    if (duration && duration > MAX_SOURCE_DURATION_SECONDS) {
-      logJob(job, `Warning: source video is ${Math.round(duration / 60)} minutes long, over the 2 hour guard.`);
+    const sourceInfo = await getVideoInfo(sourceInput);
+    if (sourceInfo.width && sourceInfo.height) {
+      logJob(job, `Source video resolution: ${sourceInfo.width}x${sourceInfo.height}.`);
+    } else {
+      logJob(job, "Source video resolution: unavailable.");
+    }
+    if (sourceInfo.duration && sourceInfo.duration > MAX_SOURCE_DURATION_SECONDS) {
+      logJob(job, `Warning: source video is ${Math.round(sourceInfo.duration / 60)} minutes long, over the 2 hour guard.`);
     }
 
     let renderInput = sourceInput;
@@ -984,6 +990,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 
     setJobProgress(job, "Rendering HD short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} HD short.`);
     logJob(job, "Applying Vivid Warm filter.");
+    logJob(job, `ffmpeg CRF used: ${FFMPEG_CRF}. Preset: ${FFMPEG_PRESET}. Audio: ${AUDIO_BITRATE}.`);
     await runTool("ffmpeg", [
       "-y",
       "-i",
@@ -993,13 +1000,13 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       "-c:v",
       "libx264",
       "-preset",
-      SHORT_PRESET,
+      FFMPEG_PRESET,
       "-crf",
       FFMPEG_CRF,
       "-c:a",
       "aac",
       "-b:a",
-      FFMPEG_AUDIO_BITRATE,
+      AUDIO_BITRATE,
       "-pix_fmt",
       "yuv420p",
       "-shortest",
@@ -1007,6 +1014,14 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       "+faststart",
       videoPath,
     ], { timeoutMs: RENDER_TIMEOUT_MS });
+
+    const outputInfo = await getVideoInfo(videoPath);
+    if (outputInfo.width && outputInfo.height) {
+      logJob(job, `Final output resolution: ${outputInfo.width}x${outputInfo.height}.`);
+    } else {
+      logJob(job, "Final output resolution: unavailable.");
+    }
+    logJob(job, `Final file size: ${formatBytes(fs.statSync(videoPath).size)}.`);
 
     setJobProgress(job, "Rendering vertical short", 65, "Creating AI thumbnail from final short.");
     await createThumbnail(videoPath, thumbnailPath, scenePlan.metadata.thumbnailText, job);
@@ -1018,7 +1033,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 }
 
 function vividWarmVideoFilter() {
-  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},eq=saturation=1.20:contrast=1.08:brightness=0.02,colorbalance=rs=.06:gs=.03:bs=-.03`;
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},unsharp=5:5:0.8:3:3:0.4,eq=saturation=1.18:contrast=1.08:brightness=0.02`;
 }
 
 async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
@@ -1047,22 +1062,42 @@ function isSupportedSourceUrl(value) {
 }
 
 async function getVideoDuration(inputPath) {
+  const info = await getVideoInfo(inputPath);
+  return info.duration || null;
+}
+
+async function getVideoInfo(inputPath) {
   try {
     const output = await runTool("ffprobe", [
       "-v",
       "error",
+      "-select_streams",
+      "v:0",
       "-show_entries",
-      "format=duration",
+      "stream=width,height:format=duration",
       "-of",
-      "default=noprint_wrappers=1:nokey=1",
+      "json",
       inputPath,
-    ], { timeoutMs: 30 * 1000, maxOutput: 2000 });
-    const duration = Number(output.trim());
-    return Number.isFinite(duration) ? duration : null;
+    ], { timeoutMs: 30 * 1000, maxOutput: 4000 });
+    const parsed = JSON.parse(output);
+    const stream = parsed.streams?.[0] || {};
+    const duration = Number(parsed.format?.duration);
+    return {
+      width: Number(stream.width) || null,
+      height: Number(stream.height) || null,
+      duration: Number.isFinite(duration) ? duration : null,
+    };
   } catch (error) {
-    console.warn(`Duration check skipped: ${error.message}`);
-    return null;
+    console.warn(`Video info check skipped: ${error.message}`);
+    return { width: null, height: null, duration: null };
   }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value)) return "unknown";
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function cleanupJobFiles(jobDir) {
@@ -1098,6 +1133,7 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
   if (!cookiesPath) throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
 
   if (YTDLP_VERBOSE) args.push("-vU");
+  logJob(job, `selected yt-dlp format: ${YTDLP_FORMAT}`);
 
   args.push(
     "--no-playlist",
@@ -1128,7 +1164,7 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
 
   args.push(
     "-f",
-    `bv*[height<=${YTDLP_MAX_HEIGHT}]+ba/b[height<=${YTDLP_MAX_HEIGHT}]/best[height<=${YTDLP_MAX_HEIGHT}]`,
+    YTDLP_FORMAT,
     "--merge-output-format",
     "mp4",
     "--no-write-subs",
