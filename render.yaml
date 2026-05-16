@@ -36,19 +36,19 @@ services:
       - key: SHORT_HEIGHT
         value: 1920
       - key: YTDLP_FORMAT
-        value: bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
+        value: bv*[height>=1080][height<=2160]+ba/b[height>=1080][height<=2160]/bv*[height<=1080]+ba/b[height<=1080]/best
       - key: FFMPEG_PRESET
-        value: veryfast
+        value: medium
       - key: FFMPEG_CRF
-        value: 20
+        value: 18
       - key: FFMPEG_MAXRATE
-        value: 10M
+        value: 16M
       - key: FFMPEG_BUFSIZE
-        value: 20M
+        value: 32M
       - key: AUDIO_BITRATE
         value: 192k
       - key: YTDLP_MAX_HEIGHT
-        value: 1080
+        value: 2160
       - key: TRANSCRIPT_LANGS
         value: en.*,en
       - key: RENDER_TIMEOUT_MS

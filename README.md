@@ -71,7 +71,7 @@ This is a local starter scaffold. Before using it for real users, replace the fi
 
 The app is optimized to avoid rendering an entire long source video. It now:
 
-1. If the user enters start/end or start/duration, downloads only that selected YouTube section with `yt-dlp --download-sections`.
+1. Downloads only the selected YouTube section with `yt-dlp --download-sections` and the `ffmpeg` downloader after manual, AI, or fallback timing is selected.
 2. If no timing is entered, checks YouTube transcript/captions when available.
 3. Asks AI to pick the strongest 30-45 second moment and create unique metadata.
 4. Falls back to `SHORT_START` and `SHORT_DURATION` when transcript or AI fails.
@@ -86,13 +86,13 @@ SHORT_START=00:01:00
 SHORT_DURATION=45
 SHORT_WIDTH=1080
 SHORT_HEIGHT=1920
-YTDLP_FORMAT=bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
-FFMPEG_PRESET=veryfast
-FFMPEG_CRF=20
-FFMPEG_MAXRATE=10M
-FFMPEG_BUFSIZE=20M
+YTDLP_FORMAT=bv*[height>=1080][height<=2160]+ba/b[height>=1080][height<=2160]/bv*[height<=1080]+ba/b[height<=1080]/best
+FFMPEG_PRESET=medium
+FFMPEG_CRF=18
+FFMPEG_MAXRATE=16M
+FFMPEG_BUFSIZE=32M
 AUDIO_BITRATE=192k
-YTDLP_MAX_HEIGHT=1080
+YTDLP_MAX_HEIGHT=2160
 TRANSCRIPT_LANGS=en.*,en
 RENDER_TIMEOUT_MS=600000
 UPLOAD_CHUNK_SIZE=8388608
@@ -100,16 +100,16 @@ UPLOAD_TIMEOUT_MS=600000
 MAX_SOURCE_DURATION_SECONDS=7200
 ```
 
-The default yt-dlp source format avoids low-quality 360p/480p video and prefers up to 1080p before the final Shorts render:
+The default yt-dlp source format avoids low-quality 360p/480p video and prefers 1080p-2160p source when available before the final Shorts render:
 
 ```text
-bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]
+bv*[height>=1080][height<=2160]+ba/b[height>=1080][height<=2160]/bv*[height<=1080]+ba/b[height<=1080]/best
 ```
 
-The default ffmpeg render target is 1080x1920 with `libx264`, `veryfast`, `crf 20`, `maxrate 10M`, `bufsize 20M`, `yuv420p`, AAC audio at 192k, `+faststart`, and this sharpened Vivid Warm filter:
+The default ffmpeg render target is 1080x1920 with `libx264`, `medium`, `crf 18`, `maxrate 16M`, `bufsize 32M`, `high` profile, `yuv420p`, AAC audio at 192k, `+faststart`, and this sharpened Vivid Warm filter:
 
 ```text
-scale=1080:1920:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:1920,unsharp=5:5:0.9:3:3:0.5,eq=saturation=1.18:contrast=1.08:brightness=0.02
+scale=1080:1920:flags=lanczos:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,unsharp=5:5:1.0:3:3:0.6,eq=saturation=1.16:contrast=1.06:brightness=0.01
 ```
 
 The job logs now show whether a manual timeline was used, transcript status, the AI-selected timestamp, generated title, generated description, selected yt-dlp format, source resolution, selected-section download, Vivid Warm filtering, ffmpeg CRF, final output resolution, final file size, and whether fallback was used.

@@ -24,13 +24,13 @@ const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
 const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 1080);
 const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1920);
-const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "veryfast";
-const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "20";
-const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "10M";
-const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "20M";
+const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "medium";
+const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "18";
+const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "16M";
+const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "32M";
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
-const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 1080);
-const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height<=${YTDLP_MAX_HEIGHT}]+ba/b[height<=${YTDLP_MAX_HEIGHT}]/best[height<=${YTDLP_MAX_HEIGHT}]`;
+const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 2160);
+const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height>=1080][height<=${YTDLP_MAX_HEIGHT}]+ba/b[height>=1080][height<=${YTDLP_MAX_HEIGHT}]/bv*[height<=1080]+ba/b[height<=1080]/best`;
 const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
@@ -958,20 +958,21 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
   const videoPath = path.join(jobDir, `short-${Date.now()}.mp4`);
   const thumbnailPath = path.join(jobDir, `thumbnail-${Date.now()}.jpg`);
   const sourceInput = isDirectVideoUrl(job.videoUrl) ? job.videoUrl : rawPath;
-  const youtubeManualSection = isYouTubeUrl(job.videoUrl) && scenePlan.manualTrim;
+  const youtubeSectionDownload = isYouTubeUrl(job.videoUrl) && scenePlan.start && scenePlan.duration;
+  const sceneEnd = getSceneEndTimestamp(scenePlan);
 
   try {
     if (isYouTubeUrl(job.videoUrl)) {
       await requireTool("yt-dlp");
       setJobProgress(
         job,
-        youtubeManualSection ? "Downloading selected clip" : "Downloading video",
+        youtubeSectionDownload ? "Downloading selected clip" : "Downloading video",
         10,
-        youtubeManualSection
-          ? `Downloading selected clip ${scenePlan.start}-${scenePlan.end} only.`
+        youtubeSectionDownload
+          ? `Downloading selected clip ${scenePlan.start}-${sceneEnd} only.`
           : "Downloading video source at Shorts-friendly quality.",
       );
-      await runYtDlp(job.videoUrl, rawPath, job, youtubeManualSection ? scenePlan : null);
+      await runYtDlp(job.videoUrl, rawPath, job, youtubeSectionDownload ? scenePlan : null);
     }
 
     const sourceInfo = await getVideoInfo(sourceInput);
@@ -985,9 +986,9 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
     }
 
     let renderInput = sourceInput;
-    if (youtubeManualSection) {
+    if (youtubeSectionDownload) {
       renderInput = rawPath;
-      setJobProgress(job, "Cutting short clip", 38, "Selected YouTube clip already downloaded. Skipping full-video trim.");
+      setJobProgress(job, "Cutting short clip", 38, "Selected YouTube clip already downloaded. No full-video download used.");
     } else {
       setJobProgress(job, "Cutting short clip", 38, `Cutting ${scenePlan.duration}s clip from ${scenePlan.start}.`);
       await runTool("ffmpeg", [
@@ -1030,6 +1031,8 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
       AUDIO_BITRATE,
       "-pix_fmt",
       "yuv420p",
+      "-profile:v",
+      "high",
       "-shortest",
       "-movflags",
       "+faststart",
@@ -1054,7 +1057,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 }
 
 function vividWarmVideoFilter() {
-  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:flags=lanczos:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},unsharp=5:5:0.9:3:3:0.5,eq=saturation=1.18:contrast=1.08:brightness=0.02`;
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:flags=lanczos:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},setsar=1,unsharp=5:5:1.0:3:3:0.6,eq=saturation=1.16:contrast=1.06:brightness=0.01`;
 }
 
 async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
@@ -1181,7 +1184,7 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
   if (sectionPlan) {
     const section = formatDownloadSection(sectionPlan);
     logJob(job, `yt-dlp download section: ${section}`);
-    args.push("--download-sections", section, "--force-keyframes-at-cuts");
+    args.push("--download-sections", section, "--downloader", "ffmpeg", "--force-keyframes-at-cuts");
   }
 
   args.push(
@@ -1201,10 +1204,15 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
 
 function formatDownloadSection(sectionPlan) {
   const start = normalizeTimestamp(sectionPlan.start) || SHORT_START;
-  const end = sectionPlan.end
+  const end = getSceneEndTimestamp({ ...sectionPlan, start });
+  return `*${start}-${end}`;
+}
+
+function getSceneEndTimestamp(sectionPlan) {
+  const start = normalizeTimestamp(sectionPlan.start) || SHORT_START;
+  return sectionPlan.end
     ? normalizeTimestamp(sectionPlan.end)
     : secondsToTimestamp(timestampToSeconds(start) + Number(sectionPlan.duration || SHORT_DURATION));
-  return `*${start}-${end}`;
 }
 
 function prepareWritableCookiesFile(job, options = {}) {
