@@ -117,6 +117,9 @@ async function createAutomation(button) {
   const body = {
     videoUrl: jobForm.videoUrl.value,
     dailyAt: jobForm.dailyAt.value,
+    trimStart: jobForm.trimStart?.value || "",
+    trimEnd: jobForm.trimEnd?.value || "",
+    trimDuration: jobForm.trimDuration?.value || "",
   };
 
   try {
@@ -125,6 +128,9 @@ async function createAutomation(button) {
       body: JSON.stringify(body),
     });
     jobForm.videoUrl.value = "";
+    if (jobForm.trimStart) jobForm.trimStart.value = "";
+    if (jobForm.trimEnd) jobForm.trimEnd.value = "";
+    if (jobForm.trimDuration) jobForm.trimDuration.value = "";
     setFormMessage("Automation created. The queue will update automatically.", "success");
     showToast("Automation created successfully.", "success");
     await loadJobs({ silent: true });
@@ -168,7 +174,7 @@ function renderDashboard() {
 function getFilteredJobs() {
   if (!currentSearch) return latestJobs;
   return latestJobs.filter((job) => {
-    const text = [job.videoUrl, job.status, job.dailyAt, ...(job.logs || [])].join(" ").toLowerCase();
+    const text = [job.videoUrl, job.status, job.dailyAt, formatTrim(job), ...(job.logs || [])].join(" ").toLowerCase();
     return text.includes(currentSearch);
   });
 }
@@ -204,6 +210,7 @@ function renderJob(job) {
     ? `<a class="upload-link" href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">View uploaded video</a>`
     : '<span class="pending-upload">No upload yet</span>';
   const logs = (job.logs || []).slice(0, 3).map((log) => `<li>${escapeHtml(log)}</li>`).join("");
+  const trim = formatTrim(job);
 
   return `
     <article class="job-card" data-job-id="${escapeHtml(job.id)}">
@@ -227,6 +234,7 @@ function renderJob(job) {
       <div class="job-meta">
         <span>Next: ${formatDate(job.nextRunAt)}</span>
         <span>Last: ${job.lastRunAt ? formatDate(job.lastRunAt) : "Never"}</span>
+        ${trim ? `<span class="trim-summary">${escapeHtml(trim)}</span>` : ""}
         <span>${upload}</span>
       </div>
       <div class="job-actions">
@@ -249,13 +257,13 @@ function renderUploads(jobs) {
     .slice(0, 8)
     .map((job) => {
       const progress = getDisplayProgress(job);
-      const title = job.lastUploadId ? "Uploaded short" : "Automation clip";
+      const title = job.lastMetadata?.title || (job.lastUploadId ? "Uploaded short" : "Automation clip");
       const statusClass = getStatusClass(job);
       const uploadedAt = job.lastRunAt ? formatDate(job.lastRunAt) : "Pending";
 
       return `
         <tr>
-          <td><strong>${title}</strong><small>${escapeHtml(job.id.slice(0, 8))}</small></td>
+          <td><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatTrim(job) || job.id.slice(0, 8))}</small></td>
           <td><span class="status-pill ${statusClass}">${getStage(job).statusText}</span></td>
           <td>
             <div class="mini-progress"><span style="width: ${progress.percent}%"></span></div>
@@ -364,9 +372,11 @@ function getStage(job) {
   if (job.status === "running") {
     if (isLongRunning(job)) return { label: "Taking longer than 10 minutes - check server logs", statusText: "Processing" };
     if (logs.includes("uploading")) return { label: "Uploading to YouTube", statusText: "Processing" };
+    if (logs.includes("selected clip")) return { label: "Downloading selected clip", statusText: "Processing" };
     if (logs.includes("cutting") || logs.includes("clip")) return { label: "Cutting short clip", statusText: "Processing" };
-    if (logs.includes("rendering") || logs.includes("preparing") || logs.includes("vertical short") || logs.includes("thumbnail")) {
-      return { label: "Rendering vertical short", statusText: "Processing" };
+    if (logs.includes("vivid warm")) return { label: "Applying Vivid Warm filter", statusText: "Processing" };
+    if (logs.includes("rendering") || logs.includes("preparing") || logs.includes("vertical short") || logs.includes("hd short") || logs.includes("thumbnail")) {
+      return { label: "Rendering HD short", statusText: "Processing" };
     }
     if (logs.includes("transcript") || logs.includes("best scene") || logs.includes("selected timestamp")) {
       return { label: "Analyzing transcript", statusText: "Processing" };
@@ -387,11 +397,16 @@ function getProgress(job) {
   if (stage === "Failed") return { percent: 100, label: stage };
   if (stage === "Completed") return { percent: 100, label: stage };
   if (stage === "Uploading to YouTube") return { percent: 82, label: stage };
+  if (stage === "Applying Vivid Warm filter") return { percent: 62, label: stage };
+  if (stage === "Rendering HD short") return { percent: 58, label: stage };
   if (stage === "Rendering vertical short") return { percent: 58, label: stage };
   if (stage === "Cutting short clip") return { percent: 46, label: stage };
   if (stage === "Generating AI metadata") return { percent: 32, label: stage };
   if (stage === "Analyzing transcript") return { percent: 12, label: stage };
+  if (stage === "Reading source metadata") return { percent: 6, label: stage };
+  if (stage === "Downloading selected clip") return { percent: 20, label: stage };
   if (stage === "Downloading video") return { percent: 18, label: stage };
+  if (stage === "Validating cookies") return { percent: 3, label: stage };
   if (stage === "Starting") return { percent: 8, label: stage };
   if (stage.includes("Taking longer")) return { percent: 98.7, label: stage };
   return { percent: 0, label: stage };
@@ -500,6 +515,11 @@ function formatPercent(value) {
   const percent = Number(value);
   if (!Number.isFinite(percent)) return "0.0%";
   return `${percent.toFixed(1)}%`;
+}
+
+function formatTrim(job) {
+  if (!job?.trim) return "";
+  return `Clip: ${job.trim.start}-${job.trim.end} (${job.trim.duration}s)`;
 }
 
 function formatDate(value) {
