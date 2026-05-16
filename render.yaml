@@ -52,7 +52,9 @@ services:
       - key: TRANSCRIPT_LANGS
         value: en.*,en
       - key: RENDER_TIMEOUT_MS
-        value: 600000
+        value: 1800000
+      - key: MIN_RENDER_TIMEOUT_MS
+        value: 1200000
       - key: UPLOAD_CHUNK_SIZE
         value: 8388608
       - key: UPLOAD_TIMEOUT_MS

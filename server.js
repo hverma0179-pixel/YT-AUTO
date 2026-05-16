@@ -31,7 +31,8 @@ const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "32M";
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
 const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 2160);
 const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height>=1080][height<=${YTDLP_MAX_HEIGHT}]+ba/b[height>=1080][height<=${YTDLP_MAX_HEIGHT}]/bv*[height<=1080]+ba/b[height<=1080]/best`;
-const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS || 10 * 60 * 1000);
+const MIN_RENDER_TIMEOUT_MS = Number(process.env.MIN_RENDER_TIMEOUT_MS || 20 * 60 * 1000);
+const RENDER_TIMEOUT_MS = Math.max(Number(process.env.RENDER_TIMEOUT_MS || 30 * 60 * 1000), MIN_RENDER_TIMEOUT_MS);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
 const MAX_SOURCE_DURATION_SECONDS = Number(process.env.MAX_SOURCE_DURATION_SECONDS || 2 * 60 * 60);
@@ -1009,6 +1010,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
     setJobProgress(job, "Rendering HD short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} HD short.`);
     logJob(job, "Applying Vivid Warm filter.");
     logJob(job, `ffmpeg CRF used: ${FFMPEG_CRF}. Preset: ${FFMPEG_PRESET}. Maxrate: ${FFMPEG_MAXRATE}. Audio: ${AUDIO_BITRATE}.`);
+    logJob(job, `ffmpeg timeout limit: ${Math.round(RENDER_TIMEOUT_MS / 1000)} seconds.`);
     await runTool("ffmpeg", [
       "-y",
       "-i",
