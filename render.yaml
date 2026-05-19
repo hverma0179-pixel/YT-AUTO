@@ -21,6 +21,8 @@ services:
         value: node:/usr/local/bin/node
       - key: YTDLP_COOKIES_PATH
         value: /etc/secrets/cookies.txt
+      - key: YTDLP_COOKIES_PATHS
+        value: /etc/secrets/cookies.txt
       - key: YTDLP_VERBOSE
         value: false
       - key: YOUTUBE_PRIVACY_STATUS
@@ -37,14 +39,16 @@ services:
         value: 1920
       - key: YTDLP_FORMAT
         value: bv*[height>=1080][height<=2160]+ba/b[height>=1080][height<=2160]/bv*[height<=1080]+ba/b[height<=1080]/best
+      - key: YTDLP_FORMAT_SORT
+        value: res:2160,fps,ext:mp4:m4a
       - key: FFMPEG_PRESET
         value: medium
       - key: FFMPEG_CRF
-        value: 18
+        value: 16
       - key: FFMPEG_MAXRATE
-        value: 16M
+        value: 24M
       - key: FFMPEG_BUFSIZE
-        value: 32M
+        value: 48M
       - key: AUDIO_BITRATE
         value: 192k
       - key: YTDLP_MAX_HEIGHT

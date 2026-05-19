@@ -22,15 +22,19 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_BODY_BYTES = 1024 * 1024;
 const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
-const SHORT_WIDTH = Number(process.env.SHORT_WIDTH || 1080);
-const SHORT_HEIGHT = Number(process.env.SHORT_HEIGHT || 1920);
+const MIN_SHORT_WIDTH = 1080;
+const MIN_SHORT_HEIGHT = 1920;
+const SHORT_WIDTH = atLeastNumber(process.env.SHORT_WIDTH, MIN_SHORT_WIDTH, MIN_SHORT_WIDTH);
+const SHORT_HEIGHT = atLeastNumber(process.env.SHORT_HEIGHT, MIN_SHORT_HEIGHT, MIN_SHORT_HEIGHT);
 const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "medium";
-const FFMPEG_CRF = process.env.FFMPEG_CRF || process.env.SHORT_CRF || "18";
-const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "16M";
-const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "32M";
+const FFMPEG_CRF = String(clampNumber(process.env.FFMPEG_CRF || process.env.SHORT_CRF, 16, 12, 18));
+const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "24M";
+const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "48M";
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
-const YTDLP_MAX_HEIGHT = Number(process.env.YTDLP_MAX_HEIGHT || 2160);
-const YTDLP_FORMAT = process.env.YTDLP_FORMAT || `bv*[height>=1080][height<=${YTDLP_MAX_HEIGHT}]+ba/b[height>=1080][height<=${YTDLP_MAX_HEIGHT}]/bv*[height<=1080]+ba/b[height<=1080]/best`;
+const YTDLP_MAX_HEIGHT = atLeastNumber(process.env.YTDLP_MAX_HEIGHT, 2160, 1080);
+const DEFAULT_YTDLP_FORMAT = `bv*[height>=1080][height<=${YTDLP_MAX_HEIGHT}]+ba/b[height>=1080][height<=${YTDLP_MAX_HEIGHT}]/bv*[height<=1080]+ba/b[height<=1080]/best`;
+const YTDLP_FORMAT = isLowQualityYtDlpFormat(process.env.YTDLP_FORMAT) ? DEFAULT_YTDLP_FORMAT : (process.env.YTDLP_FORMAT || DEFAULT_YTDLP_FORMAT);
+const YTDLP_FORMAT_SORT = process.env.YTDLP_FORMAT_SORT || `res:${YTDLP_MAX_HEIGHT},fps,ext:mp4:m4a`;
 const MIN_RENDER_TIMEOUT_MS = Number(process.env.MIN_RENDER_TIMEOUT_MS || 20 * 60 * 1000);
 const RENDER_TIMEOUT_MS = Math.max(Number(process.env.RENDER_TIMEOUT_MS || 30 * 60 * 1000), MIN_RENDER_TIMEOUT_MS);
 const UPLOAD_CHUNK_SIZE = Number(process.env.UPLOAD_CHUNK_SIZE || 8 * 1024 * 1024);
@@ -44,6 +48,7 @@ const TOOL_COMMANDS = {
 };
 const YTDLP_JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node:/usr/local/bin/node";
 const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || "./cookies.txt";
+const YTDLP_COOKIES_PATHS = splitCookiePaths(process.env.YTDLP_COOKIES_PATHS || YTDLP_COOKIES_PATH);
 const YTDLP_VERBOSE = String(process.env.YTDLP_VERBOSE || "").toLowerCase() === "true";
 const YOUTUBE_COOKIE_NAMES = ["SID", "HSID", "SAPISID", "LOGIN_INFO", "VISITOR_INFO1_LIVE", "__Secure-1PSID", "__Secure-3PSID"];
 const TOOL_VERSION_ARGS = {
@@ -139,6 +144,30 @@ function loadEnv() {
     const value = trimmed.slice(index + 1).trim().replace(/^["']|["']$/g, "");
     if (!process.env[key]) process.env[key] = value;
   }
+}
+
+function atLeastNumber(value, fallback, minimum) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.max(number, minimum);
+}
+
+function clampNumber(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(Math.max(number, minimum), maximum);
+}
+
+function isLowQualityYtDlpFormat(value) {
+  if (!value) return false;
+  return /height\s*<=\s*(360|480|720)\b/i.test(value) || /best\[height<=720\]/i.test(value);
+}
+
+function splitCookiePaths(value) {
+  return String(value || "")
+    .split(/[;\n,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function readStore() {
@@ -755,7 +784,7 @@ async function getSourceMetadata(job) {
   try {
     await requireTool("yt-dlp");
     setJobProgress(job, "Reading source metadata", 6, "Reading original video title and channel.");
-    const output = await runTool("yt-dlp", buildYtDlpMetadataArgs(job.videoUrl, job), { timeoutMs: 90 * 1000, maxOutput: 150000 });
+    const output = await runYtDlpWithCookieFallback(job, () => buildYtDlpMetadataArgs(job.videoUrl, job), { timeoutMs: 90 * 1000, maxOutput: 150000 });
     const parsed = parseJsonFromText(output);
     if (!Object.keys(parsed).length) throw new Error(`yt-dlp metadata JSON was empty or invalid: ${output.slice(-500)}`);
     const metadata = {
@@ -784,8 +813,7 @@ async function extractTranscript(job, jobDir) {
   try {
     await requireTool("yt-dlp");
     const transcriptBase = path.join(jobDir, "transcript");
-    const args = buildYtDlpTranscriptArgs(job.videoUrl, transcriptBase, job);
-    await runTool("yt-dlp", args, { timeoutMs: 2 * 60 * 1000, maxOutput: 4000 });
+    await runYtDlpWithCookieFallback(job, () => buildYtDlpTranscriptArgs(job.videoUrl, transcriptBase, job), { timeoutMs: 2 * 60 * 1000, maxOutput: 4000 });
     const transcriptFile = findTranscriptFile(jobDir);
     if (!transcriptFile) return null;
 
@@ -970,8 +998,8 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
         youtubeSectionDownload ? "Downloading selected clip" : "Downloading video",
         10,
         youtubeSectionDownload
-          ? `Downloading selected clip ${scenePlan.start}-${sceneEnd} only.`
-          : "Downloading video source at Shorts-friendly quality.",
+          ? `Downloading selected HD clip ${scenePlan.start}-${sceneEnd} only.`
+          : "Downloading HD video source at Shorts-friendly quality.",
       );
       await runYtDlp(job.videoUrl, rawPath, job, youtubeSectionDownload ? scenePlan : null);
     }
@@ -1009,6 +1037,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 
     setJobProgress(job, "Rendering HD short", 52, `Rendering ${SHORT_WIDTH}x${SHORT_HEIGHT} HD short.`);
     logJob(job, "Applying Vivid Warm filter.");
+    logJob(job, `HD quality lock: output is at least ${MIN_SHORT_WIDTH}x${MIN_SHORT_HEIGHT}, even if older Render env values are lower.`);
     logJob(job, `ffmpeg CRF used: ${FFMPEG_CRF}. Preset: ${FFMPEG_PRESET}. Maxrate: ${FFMPEG_MAXRATE}. Audio: ${AUDIO_BITRATE}.`);
     logJob(job, `ffmpeg timeout limit: ${Math.round(RENDER_TIMEOUT_MS / 1000)} seconds.`);
     await runTool("ffmpeg", [
@@ -1059,7 +1088,7 @@ async function prepareVideoAssets(job, scenePlan, jobDir) {
 }
 
 function vividWarmVideoFilter() {
-  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:flags=lanczos:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},setsar=1,unsharp=5:5:1.0:3:3:0.6,eq=saturation=1.16:contrast=1.06:brightness=0.01`;
+  return `scale=${SHORT_WIDTH}:${SHORT_HEIGHT}:flags=lanczos+accurate_rnd+full_chroma_int:force_original_aspect_ratio=increase,crop=${SHORT_WIDTH}:${SHORT_HEIGHT},setsar=1,unsharp=7:7:1.1:5:5:0.45,eq=saturation=1.12:contrast=1.06:brightness=0.005`;
 }
 
 async function createThumbnail(videoPath, thumbnailPath, thumbnailText, job) {
@@ -1144,12 +1173,28 @@ function isDirectVideoUrl(value) {
   return /^https:\/\/.+\.(mp4|mov|m4v|webm)(\?.*)?$/i.test(value);
 }
 
-function runYtDlp(videoUrl, outputPath, job, sectionPlan = null) {
-  const args = buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan);
-  return runTool("yt-dlp", args).catch((error) => {
-    logYtDlpCookieError(job, error);
-    throw new Error(friendlyYtDlpError(error));
-  });
+async function runYtDlp(videoUrl, outputPath, job, sectionPlan = null) {
+  return runYtDlpWithCookieFallback(job, () => buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan));
+}
+
+async function runYtDlpWithCookieFallback(job, argsFactory, options = {}) {
+  const attempts = Math.max(1, getCookiePathCandidates().length);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await runTool("yt-dlp", argsFactory(), options);
+    } catch (error) {
+      lastError = error;
+      logYtDlpCookieError(job, error);
+      const message = String(error?.message || error || "");
+      if (!isYtDlpCookieError(message) || !advanceCookieCandidate(job)) {
+        throw new Error(friendlyYtDlpError(error));
+      }
+    }
+  }
+
+  throw new Error(friendlyYtDlpError(lastError));
 }
 
 function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
@@ -1159,7 +1204,11 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
   if (!cookiesPath) throw new Error("cookies.txt not found. Upload cookies.txt to the server root or set YTDLP_COOKIES_PATH.");
 
   if (YTDLP_VERBOSE) args.push("-vU");
+  if (process.env.YTDLP_FORMAT && YTDLP_FORMAT !== process.env.YTDLP_FORMAT) {
+    logJob(job, "Ignored low-quality YTDLP_FORMAT env value and used HD download format.");
+  }
   logJob(job, `selected yt-dlp format: ${YTDLP_FORMAT}`);
+  logJob(job, `yt-dlp format sort: ${YTDLP_FORMAT_SORT}`);
 
   args.push(
     "--no-playlist",
@@ -1179,6 +1228,8 @@ function buildYtDlpArgs(videoUrl, outputPath, job, sectionPlan = null) {
     YTDLP_JS_RUNTIME,
     "--extractor-args",
     "youtube:player_client=android,web",
+    "--format-sort",
+    YTDLP_FORMAT_SORT,
   );
 
   args.push("--cookies", cookiesPath);
@@ -1218,39 +1269,56 @@ function getSceneEndTimestamp(sectionPlan) {
 }
 
 function prepareWritableCookiesFile(job, options = {}) {
-  const originalCookiesPath = resolveCookiesPath(YTDLP_COOKIES_PATH);
+  const candidates = getCookiePathCandidates();
   const tempCookiesPath = getTempCookiesPath(job);
-  const originalExists = Boolean(YTDLP_COOKIES_PATH && fs.existsSync(originalCookiesPath));
+  const startIndex = getCookieCandidateIndex(job);
 
-  logCookieStatus(job, `cookies source path: ${originalCookiesPath}`);
   logCookieStatus(job, `cookies temp path: ${tempCookiesPath}`);
-  logCookieStatus(job, `cookies source exists: ${originalExists}`);
+  logCookieStatus(job, `cookies candidates available: ${candidates.length}`);
 
-  if (!originalExists) {
-    logCookieStatus(job, "cookies validation failed: source file not found.");
+  if (!candidates.length) {
+    logCookieStatus(job, "cookies validation failed: no cookie source path configured.");
     if (options.required) throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
     return null;
   }
 
-  const originalValidation = validateCookiesFile(originalCookiesPath);
-  if (!originalValidation.ok) {
-    logCookieStatus(job, `cookies validation failed: ${originalValidation.reason}`);
-    throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
-  }
-  logCookieStatus(job, `cookies validation passed: ${originalValidation.foundNames.join(", ")}`);
+  for (let offset = 0; offset < candidates.length; offset += 1) {
+    const candidateIndex = (startIndex + offset) % candidates.length;
+    const originalCookiesPath = resolveCookiesPath(candidates[candidateIndex]);
+    const originalExists = Boolean(originalCookiesPath && fs.existsSync(originalCookiesPath));
 
-  fs.mkdirSync(path.dirname(tempCookiesPath), { recursive: true });
-  fs.copyFileSync(originalCookiesPath, tempCookiesPath);
-  logCookieStatus(job, "fresh cookies copy prepared for this yt-dlp run.");
-  const tempExists = fs.existsSync(tempCookiesPath);
-  logCookieStatus(job, `cookies temp exists: ${tempExists}`);
-  const tempValidation = tempExists ? validateCookiesFile(tempCookiesPath) : { ok: false, reason: "temp file not created" };
-  if (!tempValidation.ok) {
-    logCookieStatus(job, `cookies temp validation failed: ${tempValidation.reason}`);
-    throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
+    logCookieStatus(job, `cookies source path [${candidateIndex + 1}/${candidates.length}]: ${originalCookiesPath}`);
+    logCookieStatus(job, `cookies source exists: ${originalExists}`);
+
+    if (!originalExists) {
+      logCookieStatus(job, "cookies validation failed: source file not found.");
+      continue;
+    }
+
+    const originalValidation = validateCookiesFile(originalCookiesPath);
+    if (!originalValidation.ok) {
+      logCookieStatus(job, `cookies validation failed: ${originalValidation.reason}`);
+      continue;
+    }
+    logCookieStatus(job, `cookies validation passed: ${originalValidation.foundNames.join(", ")}`);
+
+    fs.mkdirSync(path.dirname(tempCookiesPath), { recursive: true });
+    fs.copyFileSync(originalCookiesPath, tempCookiesPath);
+    if (job) job.cookieCandidateIndex = candidateIndex;
+    logCookieStatus(job, "fresh cookies copy prepared for this yt-dlp run.");
+    const tempExists = fs.existsSync(tempCookiesPath);
+    logCookieStatus(job, `cookies temp exists: ${tempExists}`);
+    const tempValidation = tempExists ? validateCookiesFile(tempCookiesPath) : { ok: false, reason: "temp file not created" };
+    if (!tempValidation.ok) {
+      logCookieStatus(job, `cookies temp validation failed: ${tempValidation.reason}`);
+      continue;
+    }
+    logCookieStatus(job, `cookies temp validation passed: ${tempValidation.foundNames.join(", ")}`);
+    return tempCookiesPath;
   }
-  logCookieStatus(job, `cookies temp validation passed: ${tempValidation.foundNames.join(", ")}`);
-  return tempExists ? tempCookiesPath : null;
+
+  if (options.required) throw new Error("Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.");
+  return null;
 }
 
 function getTempCookiesPath(job) {
@@ -1263,6 +1331,26 @@ function getTempCookiesPath(job) {
 function resolveCookiesPath(value) {
   if (!value) return "";
   return path.isAbsolute(value) ? value : path.resolve(__dirname, value);
+}
+
+function getCookiePathCandidates() {
+  return YTDLP_COOKIES_PATHS.length ? YTDLP_COOKIES_PATHS : [YTDLP_COOKIES_PATH].filter(Boolean);
+}
+
+function getCookieCandidateIndex(job) {
+  const candidates = getCookiePathCandidates();
+  if (!candidates.length) return 0;
+  const index = Number(job?.cookieCandidateIndex || 0);
+  return Number.isFinite(index) ? Math.abs(Math.floor(index)) % candidates.length : 0;
+}
+
+function advanceCookieCandidate(job) {
+  const candidates = getCookiePathCandidates();
+  if (!job || candidates.length <= 1) return false;
+  const current = getCookieCandidateIndex(job);
+  job.cookieCandidateIndex = (current + 1) % candidates.length;
+  logCookieStatus(job, `YouTube rejected cookie file ${current + 1}/${candidates.length}; trying backup cookie file ${job.cookieCandidateIndex + 1}/${candidates.length}.`);
+  return true;
 }
 
 function validateCookiesFile(filePath) {

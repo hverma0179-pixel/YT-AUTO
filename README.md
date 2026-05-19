@@ -87,10 +87,11 @@ SHORT_DURATION=45
 SHORT_WIDTH=1080
 SHORT_HEIGHT=1920
 YTDLP_FORMAT=bv*[height>=1080][height<=2160]+ba/b[height>=1080][height<=2160]/bv*[height<=1080]+ba/b[height<=1080]/best
+YTDLP_FORMAT_SORT=res:2160,fps,ext:mp4:m4a
 FFMPEG_PRESET=medium
-FFMPEG_CRF=18
-FFMPEG_MAXRATE=16M
-FFMPEG_BUFSIZE=32M
+FFMPEG_CRF=16
+FFMPEG_MAXRATE=24M
+FFMPEG_BUFSIZE=48M
 AUDIO_BITRATE=192k
 YTDLP_MAX_HEIGHT=2160
 TRANSCRIPT_LANGS=en.*,en
@@ -127,7 +128,7 @@ Cloud providers can be rate-limited or blocked by YouTube when downloading video
 
 ## YouTube Cookies Setup
 
-YouTube may block server IPs with rate limits or bot checks. When that happens, `yt-dlp` can use a Netscape-format `cookies.txt` file exported from a browser where you are signed in to YouTube. These cookies are temporary, so if YouTube starts asking for login/bot verification again, export fresh cookies and update the Render Secret File.
+YouTube may block server IPs with rate limits or bot checks. When that happens, `yt-dlp` can use a Netscape-format `cookies.txt` file exported from a browser where you are signed in to YouTube. YouTube controls when browser cookies expire or get rejected, so no app can make one cookie file valid forever. This app reduces cookie failures by copying a fresh writable cookie file for every `yt-dlp` run and by rotating through backup cookie files when configured.
 
 Do not commit `cookies.txt` to GitHub. It can grant access to your YouTube session. This repo ignores it with `.gitignore`.
 
@@ -150,6 +151,7 @@ Add this to `.env`:
 
 ```env
 YTDLP_COOKIES_PATH=./cookies.txt
+YTDLP_COOKIES_PATHS=./cookies.txt
 YTDLP_VERBOSE=false
 ```
 
@@ -180,10 +182,19 @@ Set this environment variable on Render:
 
 ```env
 YTDLP_COOKIES_PATH=/etc/secrets/cookies.txt
+YTDLP_COOKIES_PATHS=/etc/secrets/cookies.txt
 YTDLP_VERBOSE=false
 ```
 
 Redeploy after updating the secret file so the service reads the latest cookies.
+
+Optional backup cookies: create more Render Secret Files, for example `cookies-2.txt` and `cookies-3.txt`, then set:
+
+```env
+YTDLP_COOKIES_PATHS=/etc/secrets/cookies.txt,/etc/secrets/cookies-2.txt,/etc/secrets/cookies-3.txt
+```
+
+If YouTube rejects one cookie file during metadata, transcript, or download, the app tries the next configured cookie file.
 
 The app never passes `/etc/secrets/cookies.txt` directly to `yt-dlp`. It validates the secret file first, then copies a fresh writable copy for each job/run to:
 
@@ -191,7 +202,7 @@ The app never passes `/etc/secrets/cookies.txt` directly to `yt-dlp`. It validat
 /tmp/autoshorts-work/<job-id>/cookies.txt
 ```
 
-Only the per-job temp cookie file is passed to `yt-dlp`, which avoids Render's read-only secret-file mount error, avoids shared `/tmp/cookies.txt` corruption between jobs, and keeps the original secret file unchanged.
+Only the per-job temp cookie file is passed to `yt-dlp`, which avoids Render's read-only secret-file mount error, avoids shared `/tmp/cookies.txt` corruption between jobs, and keeps the original secret file unchanged. The temp copy is recreated before each `yt-dlp` command.
 
 Cookie validation checks:
 
@@ -208,7 +219,7 @@ If validation fails, the job fails clearly with:
 Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.
 ```
 
-If YouTube rejects cookies during `yt-dlp`, the job fails clearly with:
+If YouTube rejects all configured cookies during `yt-dlp`, the job fails clearly with:
 
 ```text
 Cookies expired/invalid. Upload fresh cookies.txt in Render Secret File.
