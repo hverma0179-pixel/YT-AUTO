@@ -13,6 +13,14 @@ services:
         value: 7776000
       - key: SESSION_TOUCH_INTERVAL_MS
         value: 43200000
+      - key: INSTAGRAM_SCOPES
+        value: instagram_business_basic,instagram_business_content_publish
+      - key: INSTAGRAM_GRAPH_BASE_URL
+        value: https://graph.instagram.com/v24.0
+      - key: INSTAGRAM_PROCESSING_ATTEMPTS
+        value: 30
+      - key: INSTAGRAM_PROCESSING_DELAY_MS
+        value: 10000
       - key: FFMPEG_PATH
         value: ffmpeg
       - key: YTDLP_PATH
@@ -50,7 +58,7 @@ services:
       - key: FFMPEG_BUFSIZE
         value: 48M
       - key: AUDIO_BITRATE
-        value: 192k
+        value: 320k
       - key: YTDLP_MAX_HEIGHT
         value: 2160
       - key: TRANSCRIPT_LANGS

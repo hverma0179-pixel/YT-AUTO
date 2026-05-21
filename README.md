@@ -1,12 +1,13 @@
 # AutoShorts Studio
 
-AutoShorts Studio is a zero-dependency Node app that lets a user sign in with Google, paste a YouTube long-form video URL, and schedule an automated short-form upload pipeline.
+AutoShorts Studio is a zero-dependency Node app that lets a user sign in with Google, paste a YouTube long-form video URL, and schedule an automated short-form upload pipeline. It also includes an Instagram login/theme scaffold for future Reels publishing.
 
 Important: only process videos you own or have clear rights to reuse. YouTube and copyright rules still apply.
 
 ## What It Does
 
 - Google login with YouTube upload permissions.
+- Instagram login option with pink/blue Reels UI theme scaffold.
 - Dashboard that opens only after Google login.
 - Saves a daily automation job for a pasted YouTube URL or a direct video file URL.
 - Uses transcript/captions when available so AI can pick the best 30-45 second moment and create unique title, description, tags, and thumbnail text.
@@ -21,6 +22,7 @@ Important: only process videos you own or have clear rights to reuse. YouTube an
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_REDIRECT_URI`
+   - Optional Instagram scaffold values: `INSTAGRAM_CLIENT_ID`, `INSTAGRAM_CLIENT_SECRET`, `INSTAGRAM_REDIRECT_URI`
    - `OPENROUTER_API_KEY`
    - `SESSION_MAX_AGE_SECONDS` controls how long Google login stays active. Default is 90 days.
    - `SESSION_TOUCH_INTERVAL_MS` controls how often active sessions refresh. Default is 12 hours.
@@ -57,6 +59,32 @@ The app requests these scopes:
 - `https://www.googleapis.com/auth/youtube.upload`
 - `https://www.googleapis.com/auth/youtube.force-ssl`
 
+## Instagram Login / Reels Notes
+
+The login page includes **Continue with Instagram** and switches the app into a pink/blue Instagram theme after Instagram login.
+
+Set these values when you have a Meta app:
+
+```env
+INSTAGRAM_CLIENT_ID=
+INSTAGRAM_CLIENT_SECRET=
+INSTAGRAM_REDIRECT_URI=https://your-render-url.onrender.com/auth/instagram/callback
+INSTAGRAM_SCOPES=instagram_business_basic,instagram_business_content_publish
+INSTAGRAM_GRAPH_BASE_URL=https://graph.instagram.com/v24.0
+INSTAGRAM_PROCESSING_ATTEMPTS=30
+INSTAGRAM_PROCESSING_DELAY_MS=10000
+```
+
+Automatic Instagram Reel publishing is controlled by Meta's official API and requires approved publishing permissions. When Instagram is connected, the app uses the same rendered MP4 and caption metadata, exposes the MP4 from `/public/generated/`, creates a Reel media container, waits for Instagram processing, and publishes the Reel.
+
+For Instagram uploads, `APP_BASE_URL` must be your public HTTPS Render URL so Meta can fetch the rendered MP4:
+
+```env
+APP_BASE_URL=https://your-render-url.onrender.com
+```
+
+Rendered Instagram media files are kept out of Git by `.gitignore`.
+
 ## Security Notes
 
 Never put API keys or OAuth secrets in frontend files. Keep them in `.env`.
@@ -92,7 +120,7 @@ FFMPEG_PRESET=medium
 FFMPEG_CRF=16
 FFMPEG_MAXRATE=24M
 FFMPEG_BUFSIZE=48M
-AUDIO_BITRATE=192k
+AUDIO_BITRATE=320k
 YTDLP_MAX_HEIGHT=2160
 TRANSCRIPT_LANGS=en.*,en
 RENDER_TIMEOUT_MS=1800000

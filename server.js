@@ -12,6 +12,12 @@ const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_BASE_URL}/auth/callback`;
+const INSTAGRAM_REDIRECT_URI = process.env.INSTAGRAM_REDIRECT_URI || `${APP_BASE_URL}/auth/instagram/callback`;
+const INSTAGRAM_AUTH_URL = process.env.INSTAGRAM_AUTH_URL || "https://www.instagram.com/oauth/authorize";
+const INSTAGRAM_TOKEN_URL = process.env.INSTAGRAM_TOKEN_URL || "https://api.instagram.com/oauth/access_token";
+const INSTAGRAM_PROFILE_URL = process.env.INSTAGRAM_PROFILE_URL || "https://graph.instagram.com/me";
+const INSTAGRAM_GRAPH_BASE_URL = process.env.INSTAGRAM_GRAPH_BASE_URL || "https://graph.instagram.com/v24.0";
+const INSTAGRAM_SCOPES = process.env.INSTAGRAM_SCOPES || "instagram_business_basic,instagram_business_content_publish";
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const WORK_DIR = process.env.WORK_DIR || path.join(os.tmpdir(), "autoshorts-work");
 const SESSION_MAX_AGE_SECONDS = Number(process.env.SESSION_MAX_AGE_SECONDS || 90 * 24 * 60 * 60);
@@ -19,6 +25,7 @@ const SESSION_TOUCH_INTERVAL_MS = Number(process.env.SESSION_TOUCH_INTERVAL_MS |
 const SESSION_COOKIE_SECURE = APP_BASE_URL.startsWith("https://");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
+const PUBLIC_GENERATED_DIR = path.join(PUBLIC_DIR, "generated");
 const MAX_BODY_BYTES = 1024 * 1024;
 const SHORT_START = process.env.SHORT_START || "00:01:00";
 const SHORT_DURATION = Number(process.env.SHORT_DURATION || 45);
@@ -30,7 +37,7 @@ const FFMPEG_PRESET = process.env.FFMPEG_PRESET || process.env.SHORT_PRESET || "
 const FFMPEG_CRF = String(clampNumber(process.env.FFMPEG_CRF || process.env.SHORT_CRF, 16, 12, 18));
 const FFMPEG_MAXRATE = process.env.FFMPEG_MAXRATE || "24M";
 const FFMPEG_BUFSIZE = process.env.FFMPEG_BUFSIZE || "48M";
-const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "192k";
+const AUDIO_BITRATE = process.env.AUDIO_BITRATE || process.env.FFMPEG_AUDIO_BITRATE || "320k";
 const YTDLP_MAX_HEIGHT = atLeastNumber(process.env.YTDLP_MAX_HEIGHT, 2160, 1080);
 const DEFAULT_YTDLP_FORMAT = `bv*[height>=1080][height<=${YTDLP_MAX_HEIGHT}]+ba/b[height>=1080][height<=${YTDLP_MAX_HEIGHT}]/bv*[height<=1080]+ba/b[height<=1080]/best`;
 const YTDLP_FORMAT = isLowQualityYtDlpFormat(process.env.YTDLP_FORMAT) ? DEFAULT_YTDLP_FORMAT : (process.env.YTDLP_FORMAT || DEFAULT_YTDLP_FORMAT);
@@ -59,9 +66,11 @@ const TOOL_VERSION_ARGS = {
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(WORK_DIR, { recursive: true });
+fs.mkdirSync(PUBLIC_GENERATED_DIR, { recursive: true });
 
 const oauthStates = new Map();
 let store = readStore();
+ensureStoreShape(store);
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -80,6 +89,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/auth/google") return startGoogleAuth(req, res);
     if (req.method === "GET" && url.pathname === "/auth/callback") return finishGoogleAuth(req, res, url);
+    if (req.method === "GET" && url.pathname === "/auth/instagram") return startInstagramAuth(req, res);
+    if (req.method === "GET" && url.pathname === "/auth/instagram/callback") return finishInstagramAuth(req, res, url);
     if (req.method === "POST" && url.pathname === "/auth/logout") return logout(req, res);
 
     if (url.pathname.startsWith("/api/")) {
@@ -172,17 +183,26 @@ function splitCookiePaths(value) {
 
 function readStore() {
   if (!fs.existsSync(STORE_PATH)) {
-    return { sessions: {}, users: {}, tokens: {}, jobs: [] };
+    return { sessions: {}, users: {}, tokens: {}, instagramTokens: {}, jobs: [] };
   }
 
   try {
     return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
   } catch {
-    return { sessions: {}, users: {}, tokens: {}, jobs: [] };
+    return { sessions: {}, users: {}, tokens: {}, instagramTokens: {}, jobs: [] };
   }
 }
 
+function ensureStoreShape(value) {
+  value.sessions ||= {};
+  value.users ||= {};
+  value.tokens ||= {};
+  value.instagramTokens ||= {};
+  value.jobs ||= [];
+}
+
 function saveStore() {
+  ensureStoreShape(store);
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
 }
 
@@ -334,6 +354,7 @@ async function finishGoogleAuth(req, res, url) {
     email: profile.email,
     name: profile.name || profile.email,
     picture: profile.picture || "",
+    provider: "google",
   };
 
   const sid = crypto.randomBytes(32).toString("hex");
@@ -345,6 +366,71 @@ async function finishGoogleAuth(req, res, url) {
 
   setCookie(res, "sid", sid, { maxAge: SESSION_MAX_AGE_SECONDS, secure: SESSION_COOKIE_SECURE });
   redirect(res, "/");
+}
+
+function startInstagramAuth(req, res) {
+  if (!process.env.INSTAGRAM_CLIENT_ID) {
+    return redirect(res, "/?loginError=instagram_not_configured");
+  }
+
+  const state = crypto.randomBytes(24).toString("hex");
+  oauthStates.set(`instagram:${state}`, Date.now() + 10 * 60 * 1000);
+
+  const params = new URLSearchParams({
+    client_id: process.env.INSTAGRAM_CLIENT_ID,
+    redirect_uri: INSTAGRAM_REDIRECT_URI,
+    response_type: "code",
+    state,
+    scope: INSTAGRAM_SCOPES,
+  });
+
+  redirect(res, `${INSTAGRAM_AUTH_URL}?${params.toString()}`);
+}
+
+async function finishInstagramAuth(req, res, url) {
+  requireConfig(["INSTAGRAM_CLIENT_ID", "INSTAGRAM_CLIENT_SECRET"]);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const stateKey = `instagram:${state}`;
+  const expires = oauthStates.get(stateKey);
+
+  if (!code || !state || !expires || expires < Date.now()) {
+    return sendJson(res, 400, { error: "Invalid or expired Instagram login state." });
+  }
+
+  oauthStates.delete(stateKey);
+  const token = await postForm(INSTAGRAM_TOKEN_URL, {
+    code,
+    client_id: process.env.INSTAGRAM_CLIENT_ID,
+    client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
+    redirect_uri: INSTAGRAM_REDIRECT_URI,
+    grant_type: "authorization_code",
+  });
+
+  const profileUrl = new URL(INSTAGRAM_PROFILE_URL);
+  profileUrl.searchParams.set("fields", "user_id,username,account_type");
+  profileUrl.searchParams.set("access_token", token.access_token);
+  const profile = await fetchJson(profileUrl.toString());
+  const instagramId = profile.user_id || profile.id || profile.username;
+  const username = profile.username || "Instagram creator";
+  const user = {
+    id: `instagram:${instagramId}`,
+    email: "",
+    name: username,
+    picture: "",
+    provider: "instagram",
+    accountType: profile.account_type || "",
+  };
+
+  const sid = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
+  store.users[user.id] = user;
+  store.sessions[sid] = { user, createdAt: new Date().toISOString(), touchedAt: new Date().toISOString(), expiresAt };
+  store.instagramTokens[user.id] = normalizeToken(token);
+  saveStore();
+
+  setCookie(res, "sid", sid, { maxAge: SESSION_MAX_AGE_SECONDS, secure: SESSION_COOKIE_SECURE });
+  redirect(res, "/?theme=instagram");
 }
 
 function logout(req, res) {
@@ -387,6 +473,7 @@ function createJob(res, user, body) {
   const job = {
     id: crypto.randomUUID(),
     userId: user.id,
+    platform: user.provider === "instagram" ? "instagram" : "youtube",
     videoUrl,
     dailyAt,
     trim,
@@ -518,14 +605,16 @@ async function runPipeline(job) {
       : await analyzeVideoForShort(job, jobDir, sourceMetadata);
     const assets = await prepareVideoAssets(job, scenePlan, jobDir);
 
-    const uploadId = await uploadToYouTube(job.userId, assets.videoPath, assets.thumbnailPath, scenePlan.metadata, job);
+    const uploadResult = await uploadToConnectedPlatform(user, assets.videoPath, assets.thumbnailPath, scenePlan.metadata, job);
 
     job.status = "scheduled";
     job.stage = "Completed";
     job.progress = 100;
     job.error = null;
     job.lastRunAt = new Date().toISOString();
-    job.lastUploadId = uploadId;
+    job.lastUploadId = uploadResult.id;
+    job.lastUploadUrl = uploadResult.url;
+    job.lastUploadPlatform = uploadResult.platform;
     job.lastMetadata = scenePlan.metadata;
     job.lastScene = {
       start: scenePlan.start,
@@ -535,7 +624,7 @@ async function runPipeline(job) {
     };
     job.nextRunAt = nextDailyRun(job.dailyAt).toISOString();
     job.updatedAt = new Date().toISOString();
-    logJob(job, `Upload complete: https://youtube.com/watch?v=${uploadId}`);
+    logJob(job, `Upload complete: ${uploadResult.url || uploadResult.id}`);
     saveStore();
   } finally {
     cleanupJobFiles(jobDir);
@@ -1477,6 +1566,15 @@ async function logToolStatus() {
   }
 }
 
+async function uploadToConnectedPlatform(user, videoPath, thumbnailPath, metadata, job) {
+  if (user.provider === "instagram") {
+    return uploadToInstagram(user.id, videoPath, thumbnailPath, metadata, job);
+  }
+
+  const id = await uploadToYouTube(user.id, videoPath, thumbnailPath, metadata, job);
+  return { id, platform: "youtube", url: `https://youtube.com/watch?v=${id}` };
+}
+
 async function uploadToYouTube(userId, videoPath, thumbnailPath, metadata, job) {
   const token = await getFreshGoogleToken(userId);
   const stats = fs.statSync(videoPath);
@@ -1625,6 +1723,139 @@ async function uploadThumbnail(accessToken, videoId, thumbnailPath) {
   if (!response.ok) {
     console.warn(`Thumbnail upload failed: ${await response.text()}`);
   }
+}
+
+async function uploadToInstagram(userId, videoPath, thumbnailPath, metadata, job) {
+  const token = getInstagramToken(userId);
+  const media = prepareInstagramPublicMedia(videoPath, thumbnailPath, job);
+  const caption = buildInstagramCaption(metadata);
+
+  setJobProgress(job, "Uploading to Instagram", 72, "Creating Instagram Reel container.");
+  logJob(job, `Instagram public video URL: ${media.videoUrl}`);
+  const container = await instagramGraphPost(`${getInstagramUserId(userId)}/media`, token.access_token, {
+    media_type: "REELS",
+    video_url: media.videoUrl,
+    caption,
+    share_to_feed: "true",
+    cover_url: media.thumbnailUrl,
+  });
+
+  if (!container.id) {
+    throw new Error(`Instagram did not return a media container id: ${JSON.stringify(container).slice(0, 800)}`);
+  }
+
+  setJobProgress(job, "Uploading to Instagram", 78, "Instagram is processing Reel media.");
+  await waitForInstagramContainer(container.id, token.access_token, job);
+
+  setJobProgress(job, "Uploading to Instagram", 92, "Publishing Reel.");
+  const published = await instagramGraphPost(`${getInstagramUserId(userId)}/media_publish`, token.access_token, {
+    creation_id: container.id,
+  });
+
+  if (!published.id) {
+    throw new Error(`Instagram publish completed but no media id was returned: ${JSON.stringify(published).slice(0, 800)}`);
+  }
+
+  const permalink = await getInstagramPermalink(published.id, token.access_token);
+  setJobProgress(job, "Uploading to Instagram", 97, "Instagram Reel published.");
+  return { id: published.id, platform: "instagram", url: permalink || `https://www.instagram.com/reel/${published.id}/` };
+}
+
+function getInstagramToken(userId) {
+  const token = store.instagramTokens[userId];
+  if (!token?.access_token) throw new Error("Instagram token not found. Sign in with Instagram again.");
+  return token;
+}
+
+function getInstagramUserId(userId) {
+  return String(userId).replace(/^instagram:/, "");
+}
+
+function prepareInstagramPublicMedia(videoPath, thumbnailPath, job) {
+  if (!APP_BASE_URL.startsWith("https://") && String(process.env.ALLOW_HTTP_PUBLIC_MEDIA || "").toLowerCase() !== "true") {
+    throw new Error("Instagram upload needs a public HTTPS APP_BASE_URL so Meta can fetch the rendered Reel video.");
+  }
+
+  fs.mkdirSync(PUBLIC_GENERATED_DIR, { recursive: true });
+  const safeId = String(job.id || crypto.randomUUID()).replace(/[^a-z0-9-]/gi, "");
+  const stamp = Date.now();
+  const videoName = `${safeId}-${stamp}.mp4`;
+  const thumbnailName = `${safeId}-${stamp}.jpg`;
+  const publicVideoPath = path.join(PUBLIC_GENERATED_DIR, videoName);
+  const publicThumbnailPath = path.join(PUBLIC_GENERATED_DIR, thumbnailName);
+  fs.copyFileSync(videoPath, publicVideoPath);
+  if (fs.existsSync(thumbnailPath)) fs.copyFileSync(thumbnailPath, publicThumbnailPath);
+
+  const base = APP_BASE_URL.replace(/\/$/, "");
+  return {
+    videoUrl: `${base}/public/generated/${videoName}`,
+    thumbnailUrl: fs.existsSync(publicThumbnailPath) ? `${base}/public/generated/${thumbnailName}` : "",
+  };
+}
+
+function buildInstagramCaption(metadata) {
+  const tags = Array.isArray(metadata.tags) ? metadata.tags : [];
+  const hashtags = tags
+    .map((tag) => `#${String(tag).replace(/[^a-z0-9_]/gi, "")}`)
+    .filter((tag) => tag.length > 1)
+    .slice(0, 20)
+    .join(" ");
+  return clampText([metadata.title, metadata.description, hashtags].filter(Boolean).join("\n\n"), 2200);
+}
+
+async function waitForInstagramContainer(containerId, accessToken, job) {
+  const maxAttempts = Number(process.env.INSTAGRAM_PROCESSING_ATTEMPTS || 30);
+  const delayMs = Number(process.env.INSTAGRAM_PROCESSING_DELAY_MS || 10000);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const status = await instagramGraphGet(`${containerId}`, accessToken, "status_code,status");
+    const statusCode = String(status.status_code || "").toUpperCase();
+    logJob(job, `Instagram container status: ${statusCode || JSON.stringify(status).slice(0, 200)}`);
+
+    if (statusCode === "FINISHED") return;
+    if (statusCode === "ERROR" || statusCode === "EXPIRED") {
+      throw new Error(`Instagram Reel processing failed: ${JSON.stringify(status).slice(0, 800)}`);
+    }
+
+    const progress = Math.min(90, 78 + Math.floor((attempt / maxAttempts) * 12));
+    setJobProgress(job, "Uploading to Instagram", progress, `Instagram processing Reel (${attempt}/${maxAttempts}).`);
+    await delay(delayMs);
+  }
+
+  throw new Error("Instagram Reel processing timed out before publish.");
+}
+
+async function getInstagramPermalink(mediaId, accessToken) {
+  try {
+    const media = await instagramGraphGet(`${mediaId}`, accessToken, "permalink");
+    return media.permalink || "";
+  } catch (error) {
+    console.warn(`Instagram permalink fetch failed: ${error.message}`);
+    return "";
+  }
+}
+
+function instagramUrl(pathname) {
+  return `${INSTAGRAM_GRAPH_BASE_URL.replace(/\/$/, "")}/${String(pathname).replace(/^\//, "")}`;
+}
+
+async function instagramGraphGet(pathname, accessToken, fields) {
+  const url = new URL(instagramUrl(pathname));
+  if (fields) url.searchParams.set("fields", fields);
+  url.searchParams.set("access_token", accessToken);
+  return fetchJson(url.toString());
+}
+
+async function instagramGraphPost(pathname, accessToken, values) {
+  const body = new URLSearchParams({ access_token: accessToken });
+  for (const [key, value] of Object.entries(values || {})) {
+    if (value !== undefined && value !== null && value !== "") body.set(key, String(value));
+  }
+  return fetchJson(instagramUrl(pathname), {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
 }
 
 async function getFreshGoogleToken(userId) {
