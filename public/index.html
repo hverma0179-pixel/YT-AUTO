@@ -16,15 +16,28 @@
           </div>
           <div class="auth-grid">
             <div class="auth-copy">
-              <h1>Create YouTube Shorts in seconds.</h1>
+              <h1>Create Shorts and Reels in seconds.</h1>
               <p>
-                Sign in with Google, paste a source URL, and manage automated Shorts generation,
-                upload progress, logs, and recent videos from a clean creator dashboard.
+                Sign in with Google for YouTube, or connect Instagram for a Reels-ready creator
+                workspace with the same trim, quality, metadata, and progress tools.
               </p>
-              <a class="google-button" href="/auth/google">
-                <span class="google-icon">G</span>
-                Continue with Google
-              </a>
+              <div class="login-actions" aria-label="Login options">
+                <a class="google-button provider-button" href="/auth/google" data-theme-link="youtube">
+                  <span class="provider-icon google-icon">G</span>
+                  <span>
+                    Continue with Google
+                    <small>for YouTube</small>
+                  </span>
+                </a>
+                <a class="instagram-button provider-button" href="/auth/instagram" data-theme-link="instagram">
+                  <span class="provider-icon instagram-icon">IG</span>
+                  <span>
+                    Continue with Instagram
+                    <small>for Instagram Reels</small>
+                  </span>
+                </a>
+              </div>
+              <p id="authNotice" class="auth-notice"></p>
               <p class="fine-print">Only process videos you own or have permission to reuse.</p>
             </div>
             <div class="pipeline-card" aria-label="Automation pipeline preview">
@@ -75,7 +88,7 @@
           <div class="permission-box">
             <span class="status-dot"></span>
             <div>
-              <strong>YouTube access</strong>
+              <strong>Platform access</strong>
               <small id="youtubeAccessText">Connected after Google login</small>
             </div>
           </div>
@@ -273,6 +286,10 @@
                 <div class="status-row">
                   <span>YouTube access</span>
                   <strong id="youtubeStatusValue">Connected</strong>
+                </div>
+                <div class="status-row">
+                  <span>Instagram access</span>
+                  <strong id="instagramStatusValue">Not connected</strong>
                 </div>
                 <div class="status-row">
                   <span>Server status</span>

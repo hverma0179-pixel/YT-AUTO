@@ -7,6 +7,7 @@ const refreshButton = document.querySelector("#refreshButton");
 const logoutButton = document.querySelector("#logoutButton");
 const userName = document.querySelector("#userName");
 const avatar = document.querySelector("#avatar");
+const youtubeAccessText = document.querySelector("#youtubeAccessText");
 const totalJobs = document.querySelector("#totalJobs");
 const runningJobs = document.querySelector("#runningJobs");
 const uploadedJobs = document.querySelector("#uploadedJobs");
@@ -25,8 +26,10 @@ const viewLogsButton = document.querySelector("#viewLogsButton");
 const serverStatusText = document.querySelector("#serverStatusText");
 const serverStatusValue = document.querySelector("#serverStatusValue");
 const youtubeStatusValue = document.querySelector("#youtubeStatusValue");
+const instagramStatusValue = document.querySelector("#instagramStatusValue");
 const aiStatusValue = document.querySelector("#aiStatusValue");
 const uploadStatusValue = document.querySelector("#uploadStatusValue");
+const authNotice = document.querySelector("#authNotice");
 const successRateValue = document.querySelector("#successRateValue");
 const successRateFill = document.querySelector("#successRateFill");
 const avgProgressValue = document.querySelector("#avgProgressValue");
@@ -46,6 +49,7 @@ const animatedProgress = new Map();
 boot();
 
 async function boot() {
+  applyTheme(new URLSearchParams(window.location.search).get("theme"));
   try {
     const me = await api("/api/me");
     showApp(me.user);
@@ -59,11 +63,13 @@ async function boot() {
 function showAuth() {
   authView.classList.remove("hidden");
   appView.classList.add("hidden");
+  showLoginNotice();
   if (jobsPoll) clearInterval(jobsPoll);
   if (progressTicker) clearInterval(progressTicker);
 }
 
 function showApp(user) {
+  applyTheme(user.provider === "instagram" ? "instagram" : "youtube");
   authView.classList.add("hidden");
   appView.classList.remove("hidden");
   userName.textContent = user.name || user.email || "Creator";
@@ -72,7 +78,30 @@ function showApp(user) {
   } else {
     avatar.removeAttribute("src");
   }
-  youtubeStatusValue.textContent = "Connected";
+  youtubeStatusValue.textContent = user.provider === "instagram" ? "Connect Google for YouTube" : "Connected";
+  if (youtubeAccessText) {
+    youtubeAccessText.textContent = user.provider === "instagram" ? "Instagram connected" : "YouTube upload permission connected";
+  }
+  if (instagramStatusValue) {
+    instagramStatusValue.textContent = user.provider === "instagram" ? "Connected" : "Optional";
+  }
+}
+
+function applyTheme(theme) {
+  document.body.dataset.theme = theme === "instagram" ? "instagram" : "youtube";
+}
+
+function showLoginNotice() {
+  if (!authNotice) return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("loginError") === "instagram_not_configured") {
+    applyTheme("instagram");
+    authNotice.textContent = "Instagram login needs INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET in env first.";
+    authNotice.className = "auth-notice error";
+  } else {
+    authNotice.textContent = "";
+    authNotice.className = "auth-notice";
+  }
 }
 
 jobForm.addEventListener("submit", async (event) => {
@@ -87,6 +116,10 @@ quickGenerateButton.addEventListener("click", () => jobForm.requestSubmit());
 uploadVideoButton.addEventListener("click", focusVideoInput);
 quickUploadButton.addEventListener("click", focusVideoInput);
 viewLogsButton.addEventListener("click", () => scrollToSection("logsSection"));
+
+for (const link of document.querySelectorAll("[data-theme-link]")) {
+  link.addEventListener("click", () => applyTheme(link.dataset.themeLink === "instagram" ? "instagram" : "youtube"));
+}
 
 pasteUrlButton.addEventListener("click", async () => {
   try {
@@ -217,7 +250,7 @@ function renderJob(job) {
   const stage = getStage(job);
   const latestLog = job.error || (job.logs || [])[0] || "Waiting for the next scheduled run.";
   const upload = job.lastUploadId
-    ? `<a class="upload-link" href="https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}" target="_blank" rel="noreferrer">View uploaded video</a>`
+    ? `<a class="upload-link" href="${escapeHtml(getUploadUrl(job))}" target="_blank" rel="noreferrer">View uploaded ${escapeHtml(getPlatformLabel(job))}</a>`
     : '<span class="pending-upload">No upload yet</span>';
   const logs = (job.logs || []).slice(0, 3).map((log) => `<li>${escapeHtml(log)}</li>`).join("");
   const trim = formatTrim(job);
@@ -285,6 +318,16 @@ function renderUploads(jobs) {
       `;
     })
     .join("");
+}
+
+function getUploadUrl(job) {
+  if (job.lastUploadUrl) return job.lastUploadUrl;
+  if (job.lastUploadPlatform === "instagram") return `https://www.instagram.com/reel/${encodeURIComponent(job.lastUploadId)}/`;
+  return `https://youtube.com/watch?v=${encodeURIComponent(job.lastUploadId)}`;
+}
+
+function getPlatformLabel(job) {
+  return job.lastUploadPlatform === "instagram" ? "Reel" : "video";
 }
 
 function renderLogs(jobs) {
@@ -436,6 +479,7 @@ function getStage(job) {
   if (job.lastUploadId || logs.includes("upload complete")) return { label: "Completed", statusText: "Published" };
   if (job.status === "running") {
     if (isLongRunning(job)) return { label: "Taking longer than 10 minutes - check server logs", statusText: "Processing" };
+    if (logs.includes("instagram")) return { label: "Uploading to Instagram", statusText: "Processing" };
     if (logs.includes("uploading")) return { label: "Uploading to YouTube", statusText: "Processing" };
     if (logs.includes("selected clip")) return { label: "Downloading selected clip", statusText: "Processing" };
     if (logs.includes("cutting") || logs.includes("clip")) return { label: "Cutting short clip", statusText: "Processing" };
@@ -461,6 +505,7 @@ function getProgress(job) {
   const stage = getStage(job).label;
   if (stage === "Failed") return { percent: 100, label: stage };
   if (stage === "Completed") return { percent: 100, label: stage };
+  if (stage === "Uploading to Instagram") return { percent: 82, label: stage };
   if (stage === "Uploading to YouTube") return { percent: 82, label: stage };
   if (stage === "Applying Vivid Warm filter") return { percent: 62, label: stage };
   if (stage === "Rendering HD short") return { percent: 58, label: stage };
